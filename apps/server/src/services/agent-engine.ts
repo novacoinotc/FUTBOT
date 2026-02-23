@@ -9,6 +9,7 @@ import { reapDeadAgents } from "./reaper.js";
 import { processApprovedRequest } from "./request-processor.js";
 import { sseManager } from "../lib/sse-manager.js";
 import { env } from "../config/env.js";
+import { isVMConfigured, checkVMConnection, setupAgentWorkspace } from "./vm-service.js";
 import type { RequestType, RequestPriority } from "@botsurviver/shared";
 
 // Auto-approve config: when enabled, ALL request types are auto-approved
@@ -120,7 +121,7 @@ async function runAgentCycle(
       timestamp: new Date().toISOString(),
     },
   });
-  const response = await getAgentThought(context);
+  const response = await getAgentThought(context, agent.id, agent.name);
 
   // 3. Deduct API cost
   const newBalance = await deductApiCost(agent.id, response.apiCost);
@@ -133,7 +134,7 @@ async function runAgentCycle(
     agentId: agent.id,
     level: "thought",
     message: response.thought,
-    metadata: { apiCost: response.apiCost },
+    metadata: { apiCost: response.apiCost, toolsUsed: response.toolsUsed },
   });
 
   sseManager.broadcast({
@@ -142,7 +143,7 @@ async function runAgentCycle(
       agentId: agent.id,
       name: agent.name,
       status: "thought_complete",
-      message: `${agent.name} completó su pensamiento. Costo API: $${response.apiCost.toFixed(4)}`,
+      message: `${agent.name} completó su ciclo. Costo API: $${response.apiCost.toFixed(4)}${response.toolsUsed > 0 ? ` | ${response.toolsUsed} comando(s) VM` : ""}`,
       thought: response.thought.slice(0, 300),
       timestamp: new Date().toISOString(),
     },
@@ -340,6 +341,29 @@ export async function startAgentEngine(): Promise<void> {
   console.log(
     `[ENGINE] Starting agent engine with cron: ${env.AGENT_CYCLE_CRON} | Auto-approve: ${autoApproveEnabled}`
   );
+
+  // Check VM connection if configured
+  if (isVMConfigured()) {
+    const vmOk = await checkVMConnection();
+    console.log(`[ENGINE] VM connection: ${vmOk ? "OK" : "FAILED"}`);
+    if (vmOk) {
+      // Ensure all alive agents have workspaces on the VM
+      const aliveAgents = await db.query.agents.findMany({
+        where: eq(agents.status, "alive"),
+        columns: { id: true, name: true },
+      });
+      for (const a of aliveAgents) {
+        try {
+          await setupAgentWorkspace(a.id, a.name);
+        } catch {
+          // workspace may already exist, that's fine
+        }
+      }
+      console.log(`[ENGINE] VM workspaces initialized for ${aliveAgents.length} agents`);
+    }
+  } else {
+    console.log("[ENGINE] VM not configured - agents will operate without VM access");
+  }
 
   cron.schedule(env.AGENT_CYCLE_CRON, runAllAgentCycles);
 

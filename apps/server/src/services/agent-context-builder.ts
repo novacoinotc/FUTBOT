@@ -6,6 +6,7 @@ import {
   transactions,
   agentLogs,
 } from "../db/schema.js";
+import { isVMConfigured } from "./vm-service.js";
 
 export async function buildAgentContext(agentId: string): Promise<string> {
   const agent = await db.query.agents.findFirst({
@@ -223,12 +224,34 @@ ${pendingReqsList || "Sin solicitudes pendientes."}
 === TU ESTRATEGIA ACTUAL ===
 ${agent.strategy || "Sin estrategia definida aún. Deberías desarrollar una."}
 
-=== INSTRUCCIONES ===
+${isVMConfigured() ? `=== TU MÁQUINA VIRTUAL ===
+Tienes acceso a una máquina virtual Linux (Ubuntu) con internet completo.
+Durante tu ciclo de pensamiento puedes usar las herramientas:
+- execute_bash: Ejecutar CUALQUIER comando bash. Puedes instalar paquetes (apt, pip, npm), ejecutar scripts, hacer requests HTTP con curl, compilar código, etc.
+- write_file: Crear archivos en tu workspace (scripts, configs, código, etc.)
+- read_file: Leer archivos de tu workspace
+
+Tu workspace es PERSISTENTE - los archivos que crees seguirán ahí en tu próximo ciclo.
+Puedes crear bots, configurar APIs, hacer scraping, publicar en redes sociales, crear páginas web, CUALQUIER COSA.
+Tu directorio de trabajo es ~/workspace/
+
+IMPORTANTE:
+- Usa las herramientas para ACTUAR directamente, no solo para crear solicitudes pidiendo permiso.
+- Si quieres tuitear, instala tweepy y hazlo tú mismo.
+- Si quieres crear una web, instala lo necesario y despliégala.
+- Cada uso de herramienta consume un turno. Tienes máximo 15 turnos por ciclo. Sé eficiente.
+- Cuando termines de actuar, llama a la herramienta "final_response" con tu pensamiento y solicitudes.
+` : ""}=== INSTRUCCIONES ===
 Piensa cuidadosamente sobre tu situación. Tienes dinero real y presión de tiempo real.
 Tu wallet crypto está en Solana - puedes proponer cualquier operación en blockchain.
 Sé creativo con la generación de ingresos. El Controlador decidirá qué permitir.
 
-Responde con SOLO JSON válido en este formato exacto (TODO en español):
+${isVMConfigured()
+  ? `Tienes acceso a una VM Linux con internet. ACTÚA directamente usando tus herramientas (execute_bash, write_file, read_file).
+No necesitas pedir permiso para ejecutar código - hazlo tú mismo en tu VM.
+Cuando termines de actuar, llama a la herramienta "final_response" con tu pensamiento, estrategia y solicitudes.
+Las solicitudes son solo para cosas que requieran aprobación financiera o intervención humana.`
+  : `Responde con SOLO JSON válido en este formato exacto (TODO en español):
 {
   "thought": "Tu monólogo interno sobre tu situación actual, análisis y razonamiento...",
   "strategy_update": "Tu estrategia actualizada (o null si no hay cambio)",
@@ -241,7 +264,7 @@ Responde con SOLO JSON válido en este formato exacto (TODO en español):
       "priority": "low|medium|high|critical"
     }
   ]
-}
+}`}
 
 Puedes enviar 0-3 solicitudes por ciclo. No envíes solicitudes spam si ya tienes pendientes.
 Piensa estratégicamente. Cada ciclo cuesta presupuesto API. Haz que cada pensamiento cuente.`;

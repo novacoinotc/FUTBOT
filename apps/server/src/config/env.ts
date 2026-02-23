@@ -12,6 +12,11 @@ const envSchema = z.object({
   AGENT_CYCLE_CRON: z.string().default("*/10 * * * *"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   SOLANA_RPC_URL: z.string().optional(),
+  // VM access for agents
+  VM_HOST: z.string().optional(),
+  VM_SSH_PORT: z.coerce.number().default(22),
+  VM_SSH_USER: z.string().default("botadmin"),
+  VM_SSH_PRIVATE_KEY: z.string().optional(), // base64-encoded private key
 });
 
 export const env = envSchema.parse(process.env);

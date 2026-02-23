@@ -3,6 +3,7 @@ import { db } from "../config/database.js";
 import { agents, transactions, agentLogs } from "../db/schema.js";
 import { sseManager } from "../lib/sse-manager.js";
 import { generateWallet } from "./solana-wallet.js";
+import { setupAgentWorkspace, isVMConfigured } from "./vm-service.js";
 
 // Minimum budgets for a child to be viable
 const MIN_CHILD_API_BUDGET = 1;
@@ -143,6 +144,15 @@ export async function replicateAgent(
     message: `¡Replicación exitosa! Hijo "${childName}" (Gen ${child.generation}) creado. Le di $${childApiBudget} API + ${childCryptoGrant} USDT. Mi balance restante: $${newParentApiBudget} API + ${newParentCrypto} USDT. Wallet hijo: ${childWallet.address}`,
     metadata: { childId: child.id, childName, childWallet: childWallet.address, apiBudgetGiven: childApiBudget, cryptoGiven: childCryptoGrant },
   });
+
+  // Set up VM workspace for child agent if VM is configured
+  if (isVMConfigured()) {
+    try {
+      await setupAgentWorkspace(child.id, childName);
+    } catch (err) {
+      console.error(`[REPLICATOR] Failed to set up VM workspace for ${childName}:`, err);
+    }
+  }
 
   sseManager.broadcast({
     type: "agent_born",
