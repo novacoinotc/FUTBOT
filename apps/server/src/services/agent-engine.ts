@@ -67,7 +67,9 @@ const VALID_TYPES: RequestType[] = [
   "communicate",
   "strategy_change",
   "custom",
+  "human_required",
 ];
+// human_required is NEVER auto-approved - always requires human response
 const VALID_PRIORITIES: RequestPriority[] = [
   "low",
   "medium",

@@ -38,8 +38,11 @@ export const api = {
       `/api/requests${query ? `?${query}` : ""}`
     );
   },
-  approveRequest: (id: string) =>
-    apiFetch<RequestItem>(`/api/requests/${id}/approve`, { method: "POST" }),
+  approveRequest: (id: string, response?: string) =>
+    apiFetch<RequestItem>(`/api/requests/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ response }),
+    }),
   denyRequest: (id: string, reason?: string) =>
     apiFetch<RequestItem>(`/api/requests/${id}/deny`, {
       method: "POST",

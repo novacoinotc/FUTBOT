@@ -25,6 +25,7 @@ export const requestTypeEnum = pgEnum("request_type", [
   "communicate",
   "strategy_change",
   "custom",
+  "human_required",
 ]);
 
 export const requestStatusEnum = pgEnum("request_status", [

@@ -64,8 +64,19 @@ export async function processApprovedRequest(request: {
       await db.insert(agentLogs).values({
         agentId: request.agentId,
         level: "info",
-        message: `Custom request approved: ${request.title}`,
+        message: `Solicitud custom aprobada: ${request.title}`,
         metadata: request.payload,
+      });
+      return;
+    }
+
+    case "human_required": {
+      // When a human approves/responds to this, log the response
+      await db.insert(agentLogs).values({
+        agentId: request.agentId,
+        level: "info",
+        message: `[RESPUESTA DEL CONTROLADOR] Solicitud "${request.title}" fue atendida por el Controlador. ${request.payload.controllerResponse || "Aprobada."}`,
+        metadata: { fromController: true, ...request.payload },
       });
       return;
     }

@@ -50,9 +50,10 @@ router.get("/:id", async (req, res) => {
   res.json(request);
 });
 
-// Approve request
+// Approve request (with optional controller response for human_required)
 router.post("/:id/approve", async (req, res) => {
   const { id } = req.params;
+  const { response: controllerResponse } = req.body || {};
 
   const request = await db.query.requests.findFirst({
     where: eq(requests.id, id),
@@ -68,13 +69,22 @@ router.post("/:id/approve", async (req, res) => {
       .json({ error: `Request already ${request.status}` });
   }
 
+  // Merge controller response into payload if provided
+  const payload = {
+    ...((request.payload as Record<string, unknown>) || {}),
+    ...(controllerResponse ? { controllerResponse } : {}),
+  };
+
   // Update request status
   const [updated] = await db
     .update(requests)
     .set({
       status: "approved",
       resolvedAt: new Date(),
-      resolvedBy: "controller",
+      resolvedBy: controllerResponse
+        ? `controller: ${controllerResponse}`
+        : "controller",
+      payload,
     })
     .where(eq(requests.id, id))
     .returning();
@@ -95,7 +105,7 @@ router.post("/:id/approve", async (req, res) => {
 
   sseManager.broadcast({
     type: "request_resolved",
-    data: { requestId: id, status: "approved" },
+    data: { requestId: id, status: "approved", controllerResponse },
   });
 
   res.json(updated);

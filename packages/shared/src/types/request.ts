@@ -4,7 +4,8 @@ export type RequestType =
   | "spend"
   | "communicate"
   | "strategy_change"
-  | "custom";
+  | "custom"
+  | "human_required";
 
 export type RequestStatus = "pending" | "approved" | "denied";
 export type RequestPriority = "low" | "medium" | "high" | "critical";
