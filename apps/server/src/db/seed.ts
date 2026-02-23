@@ -1,7 +1,8 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import { agents, transactions } from "./schema.js";
-import { GRACE_PERIOD_DAYS, DEFAULT_BIRTH_GRANT } from "@botsurviver/shared";
+const GRACE_PERIOD_DAYS = 7;
+const DEFAULT_BIRTH_GRANT = "10";
 
 const sql = neon(process.env.DATABASE_URL!);
 const db = drizzle({ client: sql });
