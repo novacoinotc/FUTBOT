@@ -90,12 +90,17 @@ export async function buildAgentContext(agentId: string): Promise<string> {
     .map((l) => `[${new Date(l.createdAt!).toISOString()}] ${l.message}`)
     .join("\n");
 
-  // Filter controller messages from info logs
+  // Filter controller messages AND responses from info logs
   const ctrlMsgs = controllerMessages
-    .filter((l) => l.message.startsWith("[MENSAJE DEL CONTROLADOR]"))
+    .filter((l) =>
+      l.message.startsWith("[MENSAJE DEL CONTROLADOR]") ||
+      l.message.startsWith("[RESPUESTA DEL CONTROLADOR]")
+    )
     .map(
       (l) =>
-        `[${new Date(l.createdAt!).toISOString()}] ${l.message.replace("[MENSAJE DEL CONTROLADOR] ", "")}`
+        `[${new Date(l.createdAt!).toISOString()}] ${l.message
+          .replace("[MENSAJE DEL CONTROLADOR] ", "📩 Mensaje: ")
+          .replace("[RESPUESTA DEL CONTROLADOR] ", "✅ Respuesta: ")}`
     )
     .join("\n");
 
@@ -108,10 +113,15 @@ export async function buildAgentContext(agentId: string): Promise<string> {
 
   const resolvedReqsList = resolvedReqs
     .filter((r) => r.status !== "pending")
-    .map(
-      (r) =>
-        `[${r.resolvedAt ? new Date(r.resolvedAt).toISOString() : "?"}] ${r.type}: "${r.title}" -> ${r.status === "approved" ? "APROBADO" : "DENEGADO"}`
-    )
+    .map((r) => {
+      const status = r.status === "approved" ? "APROBADO" : "DENEGADO";
+      const resolvedBy = r.resolvedBy || "";
+      // Extract the controller's response text if present
+      const responseText = resolvedBy.startsWith("controller: ")
+        ? ` | Respuesta del Controlador: "${resolvedBy.replace("controller: ", "")}"`
+        : "";
+      return `[${r.resolvedAt ? new Date(r.resolvedAt).toISOString() : "?"}] ${r.type}: "${r.title}" -> ${status}${responseText}`;
+    })
     .join("\n");
 
   const siblingsList =
