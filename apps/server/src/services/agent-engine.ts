@@ -32,10 +32,42 @@ async function runAgentCycle(
     `[ENGINE] Running cycle for ${agent.name} (${agent.id}), API: $${agent.apiBudget}, Crypto: ${agent.cryptoBalance} USDT`
   );
 
+  // Broadcast: thinking started
+  sseManager.broadcast({
+    type: "agent_activity",
+    data: {
+      agentId: agent.id,
+      name: agent.name,
+      status: "thinking",
+      message: `${agent.name} está pensando...`,
+      timestamp: new Date().toISOString(),
+    },
+  });
+
   // 1. Build context
+  sseManager.broadcast({
+    type: "agent_activity",
+    data: {
+      agentId: agent.id,
+      name: agent.name,
+      status: "building_context",
+      message: `${agent.name} analizando su situación...`,
+      timestamp: new Date().toISOString(),
+    },
+  });
   const context = await buildAgentContext(agent.id);
 
   // 2. Call Claude
+  sseManager.broadcast({
+    type: "agent_activity",
+    data: {
+      agentId: agent.id,
+      name: agent.name,
+      status: "calling_ai",
+      message: `${agent.name} consultando a Claude AI...`,
+      timestamp: new Date().toISOString(),
+    },
+  });
   const response = await getAgentThought(context);
 
   // 3. Deduct API cost
@@ -52,12 +84,35 @@ async function runAgentCycle(
     metadata: { apiCost: response.apiCost },
   });
 
+  sseManager.broadcast({
+    type: "agent_activity",
+    data: {
+      agentId: agent.id,
+      name: agent.name,
+      status: "thought_complete",
+      message: `${agent.name} completó su pensamiento. Costo API: $${response.apiCost.toFixed(4)}`,
+      thought: response.thought.slice(0, 300),
+      timestamp: new Date().toISOString(),
+    },
+  });
+
   // 5. Update strategy if changed
   if (response.strategy_update) {
     await db
       .update(agents)
       .set({ strategy: response.strategy_update })
       .where(eq(agents.id, agent.id));
+
+    sseManager.broadcast({
+      type: "agent_activity",
+      data: {
+        agentId: agent.id,
+        name: agent.name,
+        status: "strategy_updated",
+        message: `${agent.name} actualizó su estrategia`,
+        timestamp: new Date().toISOString(),
+      },
+    });
   }
 
   // 6. Create requests
@@ -72,10 +127,22 @@ async function runAgentCycle(
     await db.insert(requests).values({
       agentId: agent.id,
       type,
-      title: (req.title || "Untitled request").slice(0, 200),
-      description: req.description || "No description provided",
+      title: (req.title || "Solicitud sin título").slice(0, 200),
+      description: req.description || "Sin descripción",
       payload: req.payload || {},
       priority,
+    });
+
+    sseManager.broadcast({
+      type: "agent_activity",
+      data: {
+        agentId: agent.id,
+        name: agent.name,
+        status: "request_created",
+        message: `${agent.name} creó solicitud: "${(req.title || "").slice(0, 80)}"`,
+        requestType: type,
+        timestamp: new Date().toISOString(),
+      },
     });
   }
 
@@ -85,15 +152,17 @@ async function runAgentCycle(
     .set({ lastThoughtAt: new Date() })
     .where(eq(agents.id, agent.id));
 
-  // 8. Emit SSE event
+  // 8. Emit SSE cycle complete
   sseManager.broadcast({
-    type: "agent_cycle_complete",
+    type: "agent_activity",
     data: {
       agentId: agent.id,
       name: agent.name,
-      thought: response.thought.slice(0, 200),
+      status: "idle",
+      message: `${agent.name} completó su ciclo. ${response.requests.length} solicitud(es) creada(s).`,
       newBalance,
       requestCount: response.requests.length,
+      timestamp: new Date().toISOString(),
     },
   });
 }
@@ -117,6 +186,16 @@ async function runAllAgentCycles(): Promise<void> {
       `[ENGINE] Starting cycle for ${aliveAgents.length} alive agents`
     );
 
+    sseManager.broadcast({
+      type: "engine_status",
+      data: {
+        status: "cycle_started",
+        message: `Iniciando ciclo para ${aliveAgents.length} agente(s) vivo(s)`,
+        agentCount: aliveAgents.length,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
     for (const agent of aliveAgents) {
       try {
         await runAgentCycle(agent);
@@ -137,7 +216,25 @@ async function runAllAgentCycles(): Promise<void> {
     const reaped = await reapDeadAgents();
     if (reaped > 0) {
       console.log(`[ENGINE] Reaped ${reaped} dead agents`);
+      sseManager.broadcast({
+        type: "engine_status",
+        data: {
+          status: "reaper_ran",
+          message: `El Reaper eliminó ${reaped} agente(s) sin fondos`,
+          reapedCount: reaped,
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
+
+    sseManager.broadcast({
+      type: "engine_status",
+      data: {
+        status: "cycle_complete",
+        message: "Ciclo completo. Esperando próximo ciclo...",
+        timestamp: new Date().toISOString(),
+      },
+    });
 
     console.log("[ENGINE] Cycle complete");
   } finally {

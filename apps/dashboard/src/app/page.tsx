@@ -2,6 +2,8 @@
 
 import { useAgents, useStats } from "@/hooks/use-agents";
 import { AgentCard } from "@/components/agents/agent-card";
+import { LiveFeed } from "@/components/live-feed";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api-client";
 import { toast } from "sonner";
@@ -21,13 +23,13 @@ export default function OverviewPage() {
     setTriggering(true);
     try {
       await api.triggerCycle();
-      toast.success("Agent cycle triggered");
+      toast.success("Ciclo de agentes activado");
       setTimeout(() => {
         mutateAgents();
         mutateStats();
       }, 3000);
     } catch {
-      toast.error("Failed to trigger cycle");
+      toast.error("Error al activar ciclo");
     } finally {
       setTriggering(false);
     }
@@ -39,64 +41,72 @@ export default function OverviewPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Agent Overview</h1>
-          <p className="text-muted-foreground text-sm">
-            Monitor all autonomous agents in the ecosystem
-          </p>
+    <div className="flex gap-6">
+      {/* Main content */}
+      <div className="flex-1 space-y-6 min-w-0">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Panel de Agentes</h1>
+            <p className="text-muted-foreground text-sm">
+              Monitorea todos los agentes autónomos del ecosistema
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="w-4 h-4 mr-1" />
+              Actualizar
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleTrigger}
+              disabled={triggering}
+            >
+              <Zap className="w-4 h-4 mr-1" />
+              {triggering ? "Ejecutando..." : "Forzar Ciclo"}
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="w-4 h-4 mr-1" />
-            Refresh
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleTrigger}
-            disabled={triggering}
-          >
-            <Zap className="w-4 h-4 mr-1" />
-            {triggering ? "Running..." : "Trigger Cycle"}
-          </Button>
-        </div>
+
+        {alive.length > 0 && (
+          <section>
+            <h2 className="text-lg font-semibold mb-3 text-green-400">
+              Vivos ({alive.length})
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {alive.map((agent) => (
+                <AgentCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {dead.length > 0 && (
+          <section>
+            <h2 className="text-lg font-semibold mb-3 text-red-400">
+              Muertos ({dead.length})
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {dead.map((agent) => (
+                <AgentCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {agents.length === 0 && (
+          <div className="text-center py-20 text-muted-foreground">
+            <p className="text-lg">Sin agentes aún</p>
+            <p className="text-sm">
+              Ejecuta el seed para crear el agente Genesis
+            </p>
+          </div>
+        )}
       </div>
 
-      {alive.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold mb-3 text-green-400">
-            Alive ({alive.length})
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {alive.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {dead.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold mb-3 text-red-400">
-            Dead ({dead.length})
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {dead.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {agents.length === 0 && (
-        <div className="text-center py-20 text-muted-foreground">
-          <p className="text-lg">No agents yet</p>
-          <p className="text-sm">
-            Seed the database to create the Genesis agent
-          </p>
-        </div>
-      )}
+      {/* Live Feed sidebar */}
+      <Card className="w-80 shrink-0 p-4 hidden lg:block">
+        <LiveFeed />
+      </Card>
     </div>
   );
 }
