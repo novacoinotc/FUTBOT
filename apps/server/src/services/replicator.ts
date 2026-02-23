@@ -4,9 +4,9 @@ import { agents, transactions, agentLogs } from "../db/schema.js";
 import { sseManager } from "../lib/sse-manager.js";
 import { generateWallet } from "./solana-wallet.js";
 
-const REPLICATION_COST = 5;
-const CHILD_API_BUDGET = "5";
-const CHILD_CRYPTO_GRANT = "3";
+// Minimum budgets for a child to be viable
+const MIN_CHILD_API_BUDGET = 1;
+const MIN_CHILD_CRYPTO = 0.5;
 const GRACE_PERIOD_DAYS = 7;
 
 function generateAgentName(generation: number): string {
@@ -30,16 +30,51 @@ export async function replicateAgent(
 
   if (!parent) throw new Error("Parent agent not found");
 
-  // Check parent has enough crypto to fund the child
-  if (Number(parent.cryptoBalance) < REPLICATION_COST) {
+  // Agent specifies how much to give the child (or use minimums)
+  const childApiBudget = Math.max(
+    MIN_CHILD_API_BUDGET,
+    Number(payload.childApiBudget || MIN_CHILD_API_BUDGET)
+  );
+  const childCryptoGrant = Math.max(
+    MIN_CHILD_CRYPTO,
+    Number(payload.childCryptoGrant || MIN_CHILD_CRYPTO)
+  );
+
+  // Validate parent has enough API budget
+  if (Number(parent.apiBudget) < childApiBudget) {
     throw new Error(
-      `Insufficient crypto for replication. Need ${REPLICATION_COST} USDT, have ${parent.cryptoBalance}`
+      `Presupuesto API insuficiente para replicación. Necesitas $${childApiBudget} USD, tienes $${parent.apiBudget} USD`
     );
   }
 
-  // Deduct replication cost from parent's crypto
+  // Validate parent has enough crypto
+  if (Number(parent.cryptoBalance) < childCryptoGrant) {
+    throw new Error(
+      `Crypto insuficiente para replicación. Necesitas ${childCryptoGrant} USDT, tienes ${parent.cryptoBalance} USDT`
+    );
+  }
+
+  // Deduct API budget from parent
+  const newParentApiBudget = (
+    Number(parent.apiBudget) - childApiBudget
+  ).toFixed(8);
+
+  await db
+    .update(agents)
+    .set({ apiBudget: newParentApiBudget })
+    .where(eq(agents.id, parentId));
+
+  await db.insert(transactions).values({
+    agentId: parentId,
+    amount: (-childApiBudget).toFixed(8),
+    type: "expense",
+    description: `Replicación: presupuesto API transferido a hijo ($${childApiBudget} USD)`,
+    balanceAfter: newParentApiBudget,
+  });
+
+  // Deduct crypto from parent
   const newParentCrypto = (
-    Number(parent.cryptoBalance) - REPLICATION_COST
+    Number(parent.cryptoBalance) - childCryptoGrant
   ).toFixed(8);
 
   await db
@@ -49,9 +84,9 @@ export async function replicateAgent(
 
   await db.insert(transactions).values({
     agentId: parentId,
-    amount: (-REPLICATION_COST).toFixed(8),
+    amount: (-childCryptoGrant).toFixed(8),
     type: "expense",
-    description: "Replication cost for creating child agent",
+    description: `Replicación: crypto transferido a hijo (${childCryptoGrant} USDT)`,
     balanceAfter: newParentCrypto,
   });
 
@@ -74,8 +109,8 @@ export async function replicateAgent(
       generation: parent.generation + 1,
       name: childName,
       systemPrompt: childPrompt,
-      apiBudget: CHILD_API_BUDGET,
-      cryptoBalance: CHILD_CRYPTO_GRANT,
+      apiBudget: childApiBudget.toFixed(8),
+      cryptoBalance: childCryptoGrant.toFixed(8),
       solanaAddress: childWallet.address,
       solanaPrivateKey: childWallet.privateKey,
       status: "alive",
@@ -84,19 +119,29 @@ export async function replicateAgent(
     })
     .returning();
 
-  await db.insert(transactions).values({
-    agentId: child.id,
-    amount: CHILD_CRYPTO_GRANT,
-    type: "birth_grant",
-    description: `Birth grant from parent ${parent.name}`,
-    balanceAfter: CHILD_CRYPTO_GRANT,
-  });
+  // Log child's birth grants
+  await db.insert(transactions).values([
+    {
+      agentId: child.id,
+      amount: childCryptoGrant.toFixed(8),
+      type: "birth_grant",
+      description: `Dotación crypto de padre ${parent.name}`,
+      balanceAfter: childCryptoGrant.toFixed(8),
+    },
+    {
+      agentId: child.id,
+      amount: childApiBudget.toFixed(8),
+      type: "birth_grant",
+      description: `Dotación API de padre ${parent.name}`,
+      balanceAfter: childApiBudget.toFixed(8),
+    },
+  ]);
 
   await db.insert(agentLogs).values({
     agentId: parentId,
     level: "info",
-    message: `Replicated! Child "${childName}" (Gen ${child.generation}) created. Wallet: ${childWallet.address}`,
-    metadata: { childId: child.id, childName, childWallet: childWallet.address },
+    message: `¡Replicación exitosa! Hijo "${childName}" (Gen ${child.generation}) creado. Le di $${childApiBudget} API + ${childCryptoGrant} USDT. Mi balance restante: $${newParentApiBudget} API + ${newParentCrypto} USDT. Wallet hijo: ${childWallet.address}`,
+    metadata: { childId: child.id, childName, childWallet: childWallet.address, apiBudgetGiven: childApiBudget, cryptoGiven: childCryptoGrant },
   });
 
   sseManager.broadcast({
