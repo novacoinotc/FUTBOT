@@ -29,7 +29,7 @@ async function runAgentCycle(
   agent: typeof agents.$inferSelect
 ): Promise<void> {
   console.log(
-    `[ENGINE] Running cycle for ${agent.name} (${agent.id}), balance: ${agent.walletBalance}`
+    `[ENGINE] Running cycle for ${agent.name} (${agent.id}), API: $${agent.apiBudget}, Crypto: ${agent.cryptoBalance} USDT`
   );
 
   // 1. Build context

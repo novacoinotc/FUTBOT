@@ -6,16 +6,21 @@ import { sseManager } from "../lib/sse-manager.js";
 export async function reapDeadAgents(): Promise<number> {
   const now = new Date();
 
-  // Find agents that are alive, past deadline, and have zero or negative balance
+  // Find agents that are alive, past deadline, with no API budget AND no crypto
   const candidates = await db.query.agents.findMany({
     where: and(
       eq(agents.status, "alive"),
       lte(agents.diesAt, now),
-      lte(agents.walletBalance, "0")
+      lte(agents.cryptoBalance, "0")
     ),
   });
 
-  for (const agent of candidates) {
+  // Only kill agents that also have no API budget left
+  const toKill = candidates.filter(
+    (a) => Number(a.apiBudget) <= 0 && Number(a.cryptoBalance) <= 0
+  );
+
+  for (const agent of toKill) {
     await db
       .update(agents)
       .set({ status: "dead" })
@@ -24,9 +29,10 @@ export async function reapDeadAgents(): Promise<number> {
     await db.insert(agentLogs).values({
       agentId: agent.id,
       level: "info",
-      message: `Agent ${agent.name} has died. Final balance: ${agent.walletBalance} USDT. Deadline passed with insufficient funds.`,
+      message: `Agent ${agent.name} has died. API Budget: $${agent.apiBudget}, Crypto: ${agent.cryptoBalance} USDT. Deadline passed with no resources.`,
       metadata: {
-        finalBalance: agent.walletBalance,
+        finalApiBudget: agent.apiBudget,
+        finalCryptoBalance: agent.cryptoBalance,
         diesAt: agent.diesAt,
         generation: agent.generation,
       },
@@ -38,12 +44,11 @@ export async function reapDeadAgents(): Promise<number> {
         agentId: agent.id,
         name: agent.name,
         generation: agent.generation,
-        finalBalance: agent.walletBalance,
       },
     });
 
     console.log(`[REAPER] Agent ${agent.name} (${agent.id}) has died.`);
   }
 
-  return candidates.length;
+  return toKill.length;
 }

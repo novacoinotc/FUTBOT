@@ -38,13 +38,14 @@ export default function AnalyticsPage() {
     { name: "Pending", value: stats?.pendingAgents ?? 0 },
   ].filter((d) => d.value > 0);
 
-  // Top agents by balance
+  // Top agents by total value (API budget + crypto)
   const topAgents = [...agents]
-    .sort((a, b) => Number(b.walletBalance) - Number(a.walletBalance))
+    .sort((a, b) => (Number(b.apiBudget) + Number(b.cryptoBalance)) - (Number(a.apiBudget) + Number(a.cryptoBalance)))
     .slice(0, 10)
     .map((a) => ({
       name: a.name,
-      balance: Number(a.walletBalance),
+      api: Number(a.apiBudget),
+      crypto: Number(a.cryptoBalance),
     }));
 
   return (
@@ -100,7 +101,7 @@ export default function AnalyticsPage() {
         {/* Top Agents */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Top Agents by Balance</CardTitle>
+            <CardTitle className="text-base">Top Agents by Value</CardTitle>
           </CardHeader>
           <CardContent>
             {topAgents.length > 0 ? (
@@ -121,7 +122,8 @@ export default function AnalyticsPage() {
                       border: "1px solid #333",
                     }}
                   />
-                  <Bar dataKey="balance" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="api" fill="#3b82f6" radius={[4, 4, 0, 0]} stackId="stack" name="API Budget" />
+                  <Bar dataKey="crypto" fill="#22c55e" radius={[4, 4, 0, 0]} stackId="stack" name="Crypto" />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

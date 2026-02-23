@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { env } from "./config/env.js";
+import { env, corsOrigins } from "./config/env.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { apiKeyAuth } from "./middleware/auth.js";
 import agentRoutes from "./routes/agents.js";
@@ -16,7 +16,7 @@ const app = express();
 // Middleware
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin: corsOrigins,
     credentials: true,
   })
 );

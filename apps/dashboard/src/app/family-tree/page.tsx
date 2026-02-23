@@ -3,19 +3,20 @@
 import { useAgents } from "@/hooks/use-agents";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Bot, DollarSign } from "lucide-react";
+import { Bot, Cpu, Wallet } from "lucide-react";
 import Link from "next/link";
 import type { Agent } from "@/lib/api-client";
 
 function AgentNode({ agent, allAgents }: { agent: Agent; allAgents: Agent[] }) {
   const children = allAgents.filter((a) => a.parentId === agent.id);
-  const balance = Number(agent.walletBalance);
+  const apiBudget = Number(agent.apiBudget);
+  const cryptoBalance = Number(agent.cryptoBalance);
 
   return (
     <div className="flex flex-col items-center">
       <Link href={`/agents/${agent.id}`}>
         <Card
-          className={`w-48 hover:border-primary/50 transition-colors cursor-pointer ${
+          className={`w-52 hover:border-primary/50 transition-colors cursor-pointer ${
             agent.status === "dead" ? "opacity-50" : ""
           }`}
         >
@@ -24,7 +25,7 @@ function AgentNode({ agent, allAgents }: { agent: Agent; allAgents: Agent[] }) {
               <Bot className="w-4 h-4" />
               <span className="font-medium text-sm">{agent.name}</span>
             </div>
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex items-center justify-center gap-2 mb-1">
               <Badge
                 variant="outline"
                 className={
@@ -35,9 +36,15 @@ function AgentNode({ agent, allAgents }: { agent: Agent; allAgents: Agent[] }) {
               >
                 {agent.status}
               </Badge>
-              <span className="text-xs font-mono flex items-center">
-                <DollarSign className="w-3 h-3" />
-                {balance.toFixed(2)}
+            </div>
+            <div className="flex items-center justify-center gap-3 text-xs font-mono">
+              <span className="flex items-center gap-0.5 text-blue-400">
+                <Cpu className="w-3 h-3" />${apiBudget.toFixed(2)}
+              </span>
+              <span className={`flex items-center gap-0.5 ${
+                cryptoBalance <= 0 ? "text-red-400" : cryptoBalance < 2 ? "text-yellow-400" : "text-green-400"
+              }`}>
+                <Wallet className="w-3 h-3" />{cryptoBalance.toFixed(2)}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">

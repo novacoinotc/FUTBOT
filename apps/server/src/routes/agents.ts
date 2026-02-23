@@ -1,21 +1,24 @@
 import { Router } from "express";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { db } from "../config/database.js";
 import { agents, requests, transactions, agentLogs } from "../db/schema.js";
-import { GRACE_PERIOD_DAYS, DEFAULT_BIRTH_GRANT } from "@botsurviver/shared";
+import { generateWallet, getWalletInfo } from "../services/solana-wallet.js";
+
+const GRACE_PERIOD_DAYS = 7;
 
 const router = Router();
 
-// List all agents
+// List all agents (hide private keys)
 router.get("/", async (_req, res) => {
   const allAgents = await db.query.agents.findMany({
     orderBy: [desc(agents.bornAt)],
   });
 
-  res.json({ data: allAgents, total: allAgents.length });
+  const safe = allAgents.map(({ solanaPrivateKey, ...rest }) => rest);
+  res.json({ data: safe, total: safe.length });
 });
 
-// Get agent by ID with details
+// Get agent by ID with details (hide private key)
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
 
@@ -54,19 +57,46 @@ router.get("/:id", async (req, res) => {
       })
     : null;
 
+  const { solanaPrivateKey, ...safeAgent } = agent;
+
   res.json({
-    ...agent,
-    parent,
-    children,
+    ...safeAgent,
+    parent: parent ? (({ solanaPrivateKey: _, ...p }) => p)(parent) : null,
+    children: children.map(({ solanaPrivateKey: _, ...c }) => c),
     recentTransactions: recentTx,
     recentLogs,
     requests: agentRequests,
   });
 });
 
+// Get agent's Solana wallet info (live balance from blockchain)
+router.get("/:id/wallet", async (req, res) => {
+  const { id } = req.params;
+
+  const agent = await db.query.agents.findFirst({
+    where: eq(agents.id, id),
+    columns: { solanaAddress: true, solanaPrivateKey: true },
+  });
+
+  if (!agent || !agent.solanaAddress) {
+    return res.status(404).json({ error: "Agent wallet not found" });
+  }
+
+  const walletInfo = await getWalletInfo(
+    agent.solanaAddress,
+    agent.solanaPrivateKey!
+  );
+
+  res.json({
+    address: walletInfo.address,
+    solBalance: walletInfo.solBalance,
+    usdtBalance: walletInfo.usdtBalance,
+  });
+});
+
 // Create a new agent manually
 router.post("/", async (req, res) => {
-  const { name, systemPrompt, walletBalance } = req.body;
+  const { name, systemPrompt, apiBudget, cryptoBalance } = req.body;
 
   if (!name || !systemPrompt) {
     return res
@@ -77,14 +107,17 @@ router.post("/", async (req, res) => {
   const diesAt = new Date(
     Date.now() + GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000
   );
-  const balance = walletBalance || DEFAULT_BIRTH_GRANT;
+  const wallet = generateWallet();
 
   const [agent] = await db
     .insert(agents)
     .values({
       name,
       systemPrompt,
-      walletBalance: balance,
+      apiBudget: apiBudget || "10",
+      cryptoBalance: cryptoBalance || "10",
+      solanaAddress: wallet.address,
+      solanaPrivateKey: wallet.privateKey,
       status: "alive",
       diesAt,
       metadata: { manuallyCreated: true },
@@ -93,13 +126,14 @@ router.post("/", async (req, res) => {
 
   await db.insert(transactions).values({
     agentId: agent.id,
-    amount: balance,
+    amount: agent.apiBudget,
     type: "birth_grant",
-    description: "Manual creation grant from Controller",
-    balanceAfter: balance,
+    description: "Manual creation - API budget from Controller",
+    balanceAfter: agent.apiBudget,
   });
 
-  res.status(201).json(agent);
+  const { solanaPrivateKey, ...safe } = agent;
+  res.status(201).json(safe);
 });
 
 // Kill an agent
@@ -122,9 +156,6 @@ router.delete("/:id", async (req, res) => {
 
 // Get agent family tree
 router.get("/:id/family", async (req, res) => {
-  const { id } = req.params;
-
-  // Get all agents and build tree client-side for simplicity
   const allAgents = await db.query.agents.findMany({
     columns: {
       id: true,
@@ -132,7 +163,8 @@ router.get("/:id/family", async (req, res) => {
       name: true,
       generation: true,
       status: true,
-      walletBalance: true,
+      cryptoBalance: true,
+      apiBudget: true,
     },
   });
 

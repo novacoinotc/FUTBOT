@@ -7,7 +7,9 @@ export interface Agent {
   name: string;
   systemPrompt: string;
   strategy: string | null;
-  walletBalance: string;
+  apiBudget: string;
+  cryptoBalance: string;
+  solanaAddress: string | null;
   status: AgentStatus;
   bornAt: string;
   diesAt: string;

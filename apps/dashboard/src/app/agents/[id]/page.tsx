@@ -46,7 +46,8 @@ export default function AgentDetailPage({
     );
   }
 
-  const balance = Number(agent.walletBalance);
+  const apiBudget = Number(agent.apiBudget);
+  const cryptoBalance = Number(agent.cryptoBalance);
 
   const handleKill = async () => {
     if (!confirm(`Kill agent ${agent.name}?`)) return;
@@ -115,17 +116,20 @@ export default function AgentDetailPage({
                 <Clock className="w-3 h-3" />
                 {getTimeRemaining(agent.diesAt)}
               </span>
+              <span className="flex items-center gap-1 font-mono text-blue-400">
+                API: ${apiBudget.toFixed(4)}
+              </span>
               <span
                 className={`flex items-center gap-1 font-mono ${
-                  balance <= 0
+                  cryptoBalance <= 0
                     ? "text-red-400"
-                    : balance < 2
+                    : cryptoBalance < 2
                       ? "text-yellow-400"
                       : "text-green-400"
                 }`}
               >
                 <DollarSign className="w-3 h-3" />
-                {balance.toFixed(6)} USDT
+                {cryptoBalance.toFixed(4)} USDT
               </span>
             </div>
           </div>
@@ -144,6 +148,20 @@ export default function AgentDetailPage({
           )}
         </div>
       </div>
+
+      {/* Solana Wallet */}
+      {agent.solanaAddress && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              Solana Wallet
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm font-mono break-all">{agent.solanaAddress}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Strategy */}
       {agent.strategy && (
@@ -191,7 +209,7 @@ export default function AgentDetailPage({
                   href={`/agents/${child.id}`}
                   className="block text-sm hover:underline"
                 >
-                  {child.name} ({child.status}, ${Number(child.walletBalance).toFixed(4)})
+                  {child.name} ({child.status}, {Number(child.cryptoBalance).toFixed(2)} USDT)
                 </Link>
               ))}
             </CardContent>

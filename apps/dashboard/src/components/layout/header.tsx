@@ -2,7 +2,7 @@
 
 import { useStats } from "@/hooks/use-agents";
 import { Badge } from "@/components/ui/badge";
-import { Bot, Skull, Clock, DollarSign, Inbox } from "lucide-react";
+import { Bot, Skull, Clock, Cpu, Wallet, Inbox } from "lucide-react";
 
 export function Header() {
   const { data: stats } = useStats();
@@ -26,10 +26,18 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-2 text-sm">
-        <DollarSign className="w-4 h-4 text-yellow-400" />
-        <span className="text-muted-foreground">Ecosystem:</span>
-        <span className="font-mono text-yellow-400">
-          ${Number(stats?.totalEcosystemBalance ?? 0).toFixed(4)}
+        <Cpu className="w-4 h-4 text-blue-400" />
+        <span className="text-muted-foreground">API:</span>
+        <span className="font-mono text-blue-400">
+          ${Number(stats?.totalApiBudget ?? 0).toFixed(2)}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2 text-sm">
+        <Wallet className="w-4 h-4 text-green-400" />
+        <span className="text-muted-foreground">Crypto:</span>
+        <span className="font-mono text-green-400">
+          {Number(stats?.totalCryptoBalance ?? 0).toFixed(2)} USDT
         </span>
       </div>
 

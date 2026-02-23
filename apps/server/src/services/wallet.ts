@@ -2,24 +2,26 @@ import { eq } from "drizzle-orm";
 import { db } from "../config/database.js";
 import { agents, transactions } from "../db/schema.js";
 
-export async function getBalance(agentId: string): Promise<string> {
+// === API Budget operations (for thinking costs - paid by controller) ===
+
+export async function getApiBudget(agentId: string): Promise<string> {
   const agent = await db.query.agents.findFirst({
     where: eq(agents.id, agentId),
-    columns: { walletBalance: true },
+    columns: { apiBudget: true },
   });
-  return agent?.walletBalance ?? "0";
+  return agent?.apiBudget ?? "0";
 }
 
 export async function deductApiCost(
   agentId: string,
   cost: number
 ): Promise<string> {
-  const currentBalance = await getBalance(agentId);
-  const newBalance = (Number(currentBalance) - cost).toFixed(8);
+  const current = await getApiBudget(agentId);
+  const newBalance = (Number(current) - cost).toFixed(8);
 
   await db
     .update(agents)
-    .set({ walletBalance: newBalance })
+    .set({ apiBudget: newBalance })
     .where(eq(agents.id, agentId));
 
   await db.insert(transactions).values({
@@ -33,17 +35,61 @@ export async function deductApiCost(
   return newBalance;
 }
 
+export async function addApiBudget(
+  agentId: string,
+  amount: number,
+  description: string
+): Promise<string> {
+  const current = await getApiBudget(agentId);
+  const newBalance = (Number(current) + amount).toFixed(8);
+
+  await db
+    .update(agents)
+    .set({ apiBudget: newBalance })
+    .where(eq(agents.id, agentId));
+
+  await db.insert(transactions).values({
+    agentId,
+    amount: amount.toFixed(8),
+    type: "birth_grant",
+    description,
+    balanceAfter: newBalance,
+  });
+
+  return newBalance;
+}
+
+// === Crypto balance operations (tracked in DB, synced with Solana) ===
+
+export async function getCryptoBalance(agentId: string): Promise<string> {
+  const agent = await db.query.agents.findFirst({
+    where: eq(agents.id, agentId),
+    columns: { cryptoBalance: true },
+  });
+  return agent?.cryptoBalance ?? "0";
+}
+
+export async function updateCryptoBalance(
+  agentId: string,
+  newBalance: number
+): Promise<void> {
+  await db
+    .update(agents)
+    .set({ cryptoBalance: newBalance.toFixed(8) })
+    .where(eq(agents.id, agentId));
+}
+
 export async function addIncome(
   agentId: string,
   amount: number,
   description: string
 ): Promise<string> {
-  const currentBalance = await getBalance(agentId);
-  const newBalance = (Number(currentBalance) + amount).toFixed(8);
+  const current = await getCryptoBalance(agentId);
+  const newBalance = (Number(current) + amount).toFixed(8);
 
   await db
     .update(agents)
-    .set({ walletBalance: newBalance })
+    .set({ cryptoBalance: newBalance })
     .where(eq(agents.id, agentId));
 
   await db.insert(transactions).values({
@@ -62,12 +108,12 @@ export async function deductExpense(
   amount: number,
   description: string
 ): Promise<string> {
-  const currentBalance = await getBalance(agentId);
-  const newBalance = (Number(currentBalance) - amount).toFixed(8);
+  const current = await getCryptoBalance(agentId);
+  const newBalance = (Number(current) - amount).toFixed(8);
 
   await db
     .update(agents)
-    .set({ walletBalance: newBalance })
+    .set({ cryptoBalance: newBalance })
     .where(eq(agents.id, agentId));
 
   await db.insert(transactions).values({

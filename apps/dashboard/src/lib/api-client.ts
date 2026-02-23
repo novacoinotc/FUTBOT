@@ -26,7 +26,7 @@ export const api = {
   // Agents
   getAgents: () => apiFetch<{ data: Agent[]; total: number }>("/api/agents"),
   getAgent: (id: string) => apiFetch<AgentDetail>(`/api/agents/${id}`),
-  createAgent: (data: { name: string; systemPrompt: string; walletBalance?: string }) =>
+  createAgent: (data: { name: string; systemPrompt: string; apiBudget?: string; cryptoBalance?: string }) =>
     apiFetch<Agent>("/api/agents", { method: "POST", body: JSON.stringify(data) }),
   killAgent: (id: string) =>
     apiFetch<{ message: string }>(`/api/agents/${id}`, { method: "DELETE" }),
@@ -86,7 +86,9 @@ export interface Agent {
   name: string;
   systemPrompt: string;
   strategy: string | null;
-  walletBalance: string;
+  apiBudget: string;
+  cryptoBalance: string;
+  solanaAddress: string | null;
   status: "alive" | "dead" | "pending";
   bornAt: string;
   diesAt: string;
@@ -150,6 +152,8 @@ export interface DashboardStats {
   aliveAgents: number;
   deadAgents: number;
   pendingAgents: number;
+  totalCryptoBalance: string;
+  totalApiBudget: string;
   totalEcosystemBalance: string;
   pendingRequestsCount: number;
   agentsByGeneration: Record<number, number>;

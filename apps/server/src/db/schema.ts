@@ -65,9 +65,14 @@ export const agents = pgTable(
     name: text("name").notNull(),
     systemPrompt: text("system_prompt").notNull(),
     strategy: text("strategy"),
-    walletBalance: decimal("wallet_balance", { precision: 18, scale: 8 })
+    apiBudget: decimal("api_budget", { precision: 18, scale: 8 })
       .notNull()
       .default("0"),
+    cryptoBalance: decimal("crypto_balance", { precision: 18, scale: 8 })
+      .notNull()
+      .default("0"),
+    solanaAddress: text("solana_address"),
+    solanaPrivateKey: text("solana_private_key"),
     status: agentStatusEnum("status").notNull().default("pending"),
     bornAt: timestamp("born_at", { withTimezone: true }).defaultNow(),
     diesAt: timestamp("dies_at", { withTimezone: true }).notNull(),

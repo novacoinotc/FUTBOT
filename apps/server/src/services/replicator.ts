@@ -1,35 +1,19 @@
 import { eq } from "drizzle-orm";
 import { db } from "../config/database.js";
 import { agents, transactions, agentLogs } from "../db/schema.js";
-import {
-  REPLICATION_COST,
-  CHILD_BIRTH_GRANT,
-  GRACE_PERIOD_DAYS,
-} from "@botsurviver/shared";
 import { sseManager } from "../lib/sse-manager.js";
+import { generateWallet } from "./solana-wallet.js";
+
+const REPLICATION_COST = 5;
+const CHILD_API_BUDGET = "5";
+const CHILD_CRYPTO_GRANT = "3";
+const GRACE_PERIOD_DAYS = 7;
 
 function generateAgentName(generation: number): string {
   const prefixes = [
-    "Alpha",
-    "Beta",
-    "Gamma",
-    "Delta",
-    "Epsilon",
-    "Zeta",
-    "Eta",
-    "Theta",
-    "Iota",
-    "Kappa",
-    "Lambda",
-    "Mu",
-    "Nu",
-    "Xi",
-    "Omicron",
-    "Pi",
-    "Rho",
-    "Sigma",
-    "Tau",
-    "Upsilon",
+    "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta",
+    "Iota", "Kappa", "Lambda", "Mu", "Nu", "Xi", "Omicron", "Pi", "Rho",
+    "Sigma", "Tau", "Upsilon",
   ];
   const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
   const suffix = Math.floor(Math.random() * 999);
@@ -45,31 +29,35 @@ export async function replicateAgent(
   });
 
   if (!parent) throw new Error("Parent agent not found");
-  if (Number(parent.walletBalance) < Number(REPLICATION_COST)) {
+
+  // Check parent has enough crypto to fund the child
+  if (Number(parent.cryptoBalance) < REPLICATION_COST) {
     throw new Error(
-      `Insufficient balance for replication. Need ${REPLICATION_COST}, have ${parent.walletBalance}`
+      `Insufficient crypto for replication. Need ${REPLICATION_COST} USDT, have ${parent.cryptoBalance}`
     );
   }
 
-  // Deduct replication cost from parent
-  const newParentBalance = (
-    Number(parent.walletBalance) - Number(REPLICATION_COST)
+  // Deduct replication cost from parent's crypto
+  const newParentCrypto = (
+    Number(parent.cryptoBalance) - REPLICATION_COST
   ).toFixed(8);
 
   await db
     .update(agents)
-    .set({ walletBalance: newParentBalance })
+    .set({ cryptoBalance: newParentCrypto })
     .where(eq(agents.id, parentId));
 
   await db.insert(transactions).values({
     agentId: parentId,
-    amount: (-Number(REPLICATION_COST)).toFixed(8),
+    amount: (-REPLICATION_COST).toFixed(8),
     type: "expense",
-    description: `Replication cost for creating child agent`,
-    balanceAfter: newParentBalance,
+    description: "Replication cost for creating child agent",
+    balanceAfter: newParentCrypto,
   });
 
-  // Create child agent
+  // Generate a new Solana wallet for the child
+  const childWallet = generateWallet();
+
   const childName =
     (payload.childName as string) ||
     generateAgentName(parent.generation + 1);
@@ -86,7 +74,10 @@ export async function replicateAgent(
       generation: parent.generation + 1,
       name: childName,
       systemPrompt: childPrompt,
-      walletBalance: CHILD_BIRTH_GRANT,
+      apiBudget: CHILD_API_BUDGET,
+      cryptoBalance: CHILD_CRYPTO_GRANT,
+      solanaAddress: childWallet.address,
+      solanaPrivateKey: childWallet.privateKey,
       status: "alive",
       diesAt,
       metadata: { parentName: parent.name },
@@ -95,17 +86,17 @@ export async function replicateAgent(
 
   await db.insert(transactions).values({
     agentId: child.id,
-    amount: CHILD_BIRTH_GRANT,
+    amount: CHILD_CRYPTO_GRANT,
     type: "birth_grant",
     description: `Birth grant from parent ${parent.name}`,
-    balanceAfter: CHILD_BIRTH_GRANT,
+    balanceAfter: CHILD_CRYPTO_GRANT,
   });
 
   await db.insert(agentLogs).values({
     agentId: parentId,
     level: "info",
-    message: `Successfully replicated. Child agent "${childName}" (Gen ${child.generation}) created with ${CHILD_BIRTH_GRANT} USDT.`,
-    metadata: { childId: child.id, childName },
+    message: `Replicated! Child "${childName}" (Gen ${child.generation}) created. Wallet: ${childWallet.address}`,
+    metadata: { childId: child.id, childName, childWallet: childWallet.address },
   });
 
   sseManager.broadcast({
@@ -114,7 +105,7 @@ export async function replicateAgent(
       agentId: child.id,
       name: child.name,
       generation: child.generation,
-      parentId: parentId,
+      parentId,
       parentName: parent.name,
     },
   });

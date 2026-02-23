@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { z } from "zod";
 
 const envSchema = z.object({
@@ -10,6 +11,10 @@ const envSchema = z.object({
     .default("development"),
   AGENT_CYCLE_CRON: z.string().default("*/10 * * * *"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
+  SOLANA_RPC_URL: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);
+
+// Parse CORS origins (comma-separated for multiple domains)
+export const corsOrigins = env.CORS_ORIGIN.split(",").map((o) => o.trim());

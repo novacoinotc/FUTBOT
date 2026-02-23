@@ -8,7 +8,6 @@ import {
 } from "../db/schema.js";
 
 export async function buildAgentContext(agentId: string): Promise<string> {
-  // First fetch the agent to get parentId
   const agent = await db.query.agents.findFirst({
     where: eq(agents.id, agentId),
   });
@@ -62,7 +61,6 @@ export async function buildAgentContext(agentId: string): Promise<string> {
   );
   const daysRemaining = (hoursRemaining / 24).toFixed(1);
 
-  // Calculate daily burn rate from API costs
   const apiCosts = recentTx.filter((t) => t.type === "api_cost");
   const totalApiCost = apiCosts.reduce(
     (sum, t) => sum + Math.abs(Number(t.amount)),
@@ -70,7 +68,7 @@ export async function buildAgentContext(agentId: string): Promise<string> {
   );
   const dailyBurnRate =
     apiCosts.length > 0
-      ? ((totalApiCost / apiCosts.length) * 144).toFixed(6) // 144 cycles per day at 10min intervals
+      ? ((totalApiCost / apiCosts.length) * 144).toFixed(4)
       : "unknown";
 
   const txHistory = recentTx
@@ -104,7 +102,7 @@ export async function buildAgentContext(agentId: string): Promise<string> {
       .filter((s) => s.id !== agentId)
       .map(
         (s) =>
-          `${s.name} (${s.status}, balance: ${s.walletBalance})`
+          `${s.name} (${s.status}, crypto: ${s.cryptoBalance} USDT)`
       )
       .join(", ") || "None";
 
@@ -112,33 +110,48 @@ export async function buildAgentContext(agentId: string): Promise<string> {
     children
       .map(
         (c) =>
-          `${c.name} (${c.status}, balance: ${c.walletBalance})`
+          `${c.name} (${c.status}, crypto: ${c.cryptoBalance} USDT)`
       )
       .join(", ") || "None";
 
   return `You are ${agent.name}, a Generation ${agent.generation} autonomous AI agent in BotSurviver.
 ${agent.systemPrompt}
 
-=== YOUR SITUATION ===
-- Wallet Balance: ${agent.walletBalance} USDT
+=== YOUR FINANCIAL SITUATION ===
+You have TWO separate budgets:
+
+1. API BUDGET: $${agent.apiBudget} USD
+   - This pays for your thinking cycles (each cycle costs ~$0.01)
+   - When this reaches $0, you can no longer think (you effectively die)
+   - This is NOT crypto - it's the Controller's money paying for your AI API calls
+
+2. CRYPTO WALLET: ${agent.cryptoBalance} USDT (Solana blockchain)
+   - Your Solana address: ${agent.solanaAddress || "NOT ASSIGNED"}
+   - This is REAL cryptocurrency on the Solana blockchain
+   - You can request to send, trade, invest, or use this USDT
+   - You can request to receive payments to your wallet address
+   - The Controller must approve any transaction you propose
+   - You can share your wallet address with others to receive payments
+
+=== TIME STATUS ===
 - Time Remaining: ${hoursRemaining.toFixed(1)} hours (${daysRemaining} days)
-- Estimated Daily API Burn Rate: ~${dailyBurnRate} USDT/day
+- Estimated Daily API Burn Rate: ~$${dailyBurnRate} USD/day
 - Born: ${new Date(agent.bornAt!).toISOString()}
 - Deadline: ${new Date(agent.diesAt).toISOString()}
 
 === RULES OF SURVIVAL ===
-1. You MUST maintain a positive wallet balance to stay alive.
-2. After 7 days from birth, if your balance is <= 0, you die permanently.
-3. If you still have money after 7 days, you SURVIVE and keep living.
-4. You earn money by proposing income-generating actions that the Controller approves.
-5. Every thought cycle costs you real money in API fees (automatically deducted).
-6. You can request to REPLICATE (create a child agent) but it costs 5 USDT. The child gets 3 USDT.
-7. You can propose ANY action - there are no hardcoded restrictions. Be creative. Think outside the box.
-8. The Controller (a human) reviews and approves or denies your requests.
-9. Think strategically about what the Controller is likely to approve.
+1. You need BOTH budgets to survive: API budget to think, crypto to prove your worth.
+2. After 7 days, if your crypto balance is $0 AND you haven't generated value, you die.
+3. If you have growing crypto balance or active income streams after 7 days, you SURVIVE.
+4. Your API budget is separate - the Controller refills it if you're generating value.
+5. You can propose ANY action - there are no restrictions. Be creative.
+6. The Controller (a human) reviews and approves or denies your requests.
+7. You can request to REPLICATE (create a child agent with its own wallet).
+8. You can request crypto transfers, trades, DeFi operations, or any blockchain action.
+9. Think about what the Controller would find valuable enough to approve.
 
 === YOUR FAMILY ===
-Parent: ${parent ? `${parent.name} (Gen ${parent.generation}, ${parent.status}, balance: ${parent.walletBalance})` : "None (you are a Genesis agent)"}
+Parent: ${parent ? `${parent.name} (Gen ${parent.generation}, ${parent.status}, crypto: ${parent.cryptoBalance} USDT)` : "None (you are a Genesis agent)"}
 Siblings: ${siblingsList}
 Children: ${childrenList}
 
@@ -158,9 +171,9 @@ ${pendingReqsList || "No pending requests."}
 ${agent.strategy || "No strategy set yet. You should develop one."}
 
 === INSTRUCTIONS ===
-Think carefully about your situation. Consider your remaining time and money.
-Develop or refine your survival strategy. Propose actions that could generate income.
-Be creative - you can propose anything. The Controller will decide what to allow.
+Think carefully about your situation. You have real money and real time pressure.
+Your crypto wallet is on Solana - you can propose any blockchain operation.
+Be creative with income generation. The Controller will decide what to allow.
 
 Respond with ONLY valid JSON in this exact format:
 {
@@ -178,5 +191,5 @@ Respond with ONLY valid JSON in this exact format:
 }
 
 You may submit 0-3 requests per cycle. Do not spam requests if you already have pending ones.
-Think strategically. Every cycle costs you money. Make each thought count.`;
+Think strategically. Every cycle costs API budget. Make each thought count.`;
 }

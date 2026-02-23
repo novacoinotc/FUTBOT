@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../config/database.js";
 import { agents, requests } from "../db/schema.js";
 
@@ -12,8 +12,13 @@ router.get("/", async (_req, res) => {
   const dead = allAgents.filter((a) => a.status === "dead");
   const pending = allAgents.filter((a) => a.status === "pending");
 
-  const totalBalance = alive.reduce(
-    (sum, a) => sum + Number(a.walletBalance),
+  const totalCryptoBalance = alive.reduce(
+    (sum, a) => sum + Number(a.cryptoBalance),
+    0
+  );
+
+  const totalApiBudget = alive.reduce(
+    (sum, a) => sum + Number(a.apiBudget),
     0
   );
 
@@ -33,7 +38,9 @@ router.get("/", async (_req, res) => {
     aliveAgents: alive.length,
     deadAgents: dead.length,
     pendingAgents: pending.length,
-    totalEcosystemBalance: totalBalance.toFixed(8),
+    totalCryptoBalance: totalCryptoBalance.toFixed(8),
+    totalApiBudget: totalApiBudget.toFixed(8),
+    totalEcosystemBalance: (totalCryptoBalance + totalApiBudget).toFixed(8),
     pendingRequestsCount: pendingRequests.length,
     agentsByGeneration,
   });

@@ -1,5 +1,5 @@
 {
-  "id": "629a5bc8-7f6f-425a-8044-a687bc50d7cd",
+  "id": "3e733ba6-ce1a-4fce-89e7-b75ba31d4b13",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -225,12 +225,31 @@
           "primaryKey": false,
           "notNull": false
         },
-        "wallet_balance": {
-          "name": "wallet_balance",
+        "api_budget": {
+          "name": "api_budget",
           "type": "numeric(18, 8)",
           "primaryKey": false,
           "notNull": true,
           "default": "'0'"
+        },
+        "crypto_balance": {
+          "name": "crypto_balance",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "solana_address": {
+          "name": "solana_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "solana_private_key": {
+          "name": "solana_private_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "status": {
           "name": "status",
