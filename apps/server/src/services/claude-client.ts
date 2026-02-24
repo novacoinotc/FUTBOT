@@ -138,7 +138,8 @@ const FINAL_RESPONSE_TOOL: Anthropic.Tool = {
   },
 };
 
-const MAX_TOOL_TURNS = 15;
+// Safety net only - the real limit is the agent's API budget
+const MAX_TOOL_TURNS = 50;
 
 // Sonnet pricing: $3/M input, $15/M output
 function calculateCost(usage: { input_tokens: number; output_tokens: number }): number {
@@ -323,10 +324,41 @@ export async function getAgentThought(
     }
   }
 
-  // Max turns reached - return what we have
+  // Safety limit reached - ask Claude for a final summary
+  try {
+    messages.push({
+      role: "user",
+      content:
+        "Has alcanzado el límite de acciones por ciclo. Llama a final_response AHORA con tu pensamiento, estrategia y solicitudes.",
+    });
+    const finalMsg = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2048,
+      system: systemPrompt,
+      tools: [FINAL_RESPONSE_TOOL],
+      messages,
+    });
+    totalCost += calculateCost(finalMsg.usage);
+    for (const block of finalMsg.content) {
+      if (block.type === "tool_use" && block.name === "final_response") {
+        const input = block.input as Record<string, unknown>;
+        return {
+          thought: (input.thought as string) || "Ciclo alcanzó límite de seguridad.",
+          strategy_update: (input.strategy_update as string) || null,
+          requests: Array.isArray(input.requests)
+            ? (input.requests as AgentThoughtResponse["requests"]).slice(0, 3)
+            : [],
+          apiCost: totalCost,
+          toolsUsed,
+        };
+      }
+    }
+  } catch {
+    // If this also fails, fall through
+  }
+
   return {
-    thought:
-      "Ciclo de pensamiento alcanzó el máximo de turnos de herramientas.",
+    thought: "Ciclo alcanzó el límite de seguridad de acciones.",
     strategy_update: null,
     requests: [],
     apiCost: totalCost,
