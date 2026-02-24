@@ -81,7 +81,7 @@ const FINAL_RESPONSE_TOOL: Groq.Chat.ChatCompletionTool = {
       type: "object",
       properties: {
         thought: { type: "string", description: "Tu análisis del ciclo" },
-        strategy_update: { type: "string", description: "Estrategia nueva o null" },
+        strategy_update: { type: "string", description: "Estrategia nueva (omitir si no hay cambio)" },
         requests: {
           type: "array",
           description: "Solicitudes (0-3)",
