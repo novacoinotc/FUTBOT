@@ -3,7 +3,8 @@ import { z } from "zod";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
-  ANTHROPIC_API_KEY: z.string().min(1),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  GROQ_API_KEY: z.string().min(1),
   API_KEY: z.string().min(1),
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z

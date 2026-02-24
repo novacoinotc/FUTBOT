@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import { env } from "../config/env.js";
 import {
   executeCommand,
@@ -8,7 +8,7 @@ import {
 } from "./vm-service.js";
 import { sseManager } from "../lib/sse-manager.js";
 
-const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+const groq = new Groq({ apiKey: env.GROQ_API_KEY });
 
 export interface AgentThoughtResponse {
   thought: string;
@@ -24,131 +24,150 @@ export interface AgentThoughtResponse {
   toolsUsed: number;
 }
 
-// Tool definitions for the agent's VM
-const VM_TOOLS: Anthropic.Tool[] = [
+// Tool definitions in OpenAI format for Groq
+const VM_TOOLS: Groq.Chat.ChatCompletionTool[] = [
   {
-    name: "execute_bash",
-    description:
-      "Ejecuta un comando bash en tu máquina virtual Linux (Ubuntu). Tienes internet completo, puedes instalar paquetes con apt/pip/npm, ejecutar scripts, hacer curl/wget, compilar código, etc. Tu directorio de trabajo es ~/workspace/",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        command: {
-          type: "string",
-          description: "El comando bash a ejecutar",
+    type: "function",
+    function: {
+      name: "execute_bash",
+      description:
+        "Ejecuta un comando bash en tu máquina virtual Linux (Ubuntu). Tienes internet completo, puedes instalar paquetes con apt/pip/npm, ejecutar scripts, hacer curl/wget, compilar código, etc. Tu directorio de trabajo es ~/workspace/",
+      parameters: {
+        type: "object",
+        properties: {
+          command: {
+            type: "string",
+            description: "El comando bash a ejecutar",
+          },
+          timeout: {
+            type: "number",
+            description: "Timeout en segundos (default 30, max 120)",
+          },
         },
-        timeout: {
-          type: "number",
-          description: "Timeout en segundos (default 30, max 120)",
-        },
+        required: ["command"],
       },
-      required: ["command"],
     },
   },
   {
-    name: "write_file",
-    description:
-      "Escribe un archivo en tu workspace (~/workspace/). Puedes crear scripts, configs, código, etc.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        path: {
-          type: "string",
-          description:
-            "Ruta relativa al archivo (ej: 'bot.py', 'config/twitter.json')",
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Escribe un archivo en tu workspace (~/workspace/). Puedes crear scripts, configs, código, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description:
+              "Ruta relativa al archivo (ej: 'bot.py', 'config/twitter.json')",
+          },
+          content: {
+            type: "string",
+            description: "Contenido completo del archivo",
+          },
         },
-        content: {
-          type: "string",
-          description: "Contenido completo del archivo",
-        },
+        required: ["path", "content"],
       },
-      required: ["path", "content"],
     },
   },
   {
-    name: "read_file",
-    description: "Lee un archivo de tu workspace",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        path: {
-          type: "string",
-          description: "Ruta relativa al archivo",
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Lee un archivo de tu workspace",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Ruta relativa al archivo",
+          },
         },
+        required: ["path"],
       },
-      required: ["path"],
     },
   },
 ];
 
-// The final response tool - agent must call this when done
-const FINAL_RESPONSE_TOOL: Anthropic.Tool = {
-  name: "final_response",
-  description:
-    "Cuando termines todas tus acciones del ciclo, usa esta herramienta para dar tu respuesta final con tu pensamiento, actualización de estrategia y solicitudes.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      thought: {
-        type: "string",
-        description:
-          "Tu monólogo interno sobre tu situación, lo que hiciste este ciclo, y tu análisis",
-      },
-      strategy_update: {
-        type: "string",
-        description: "Tu estrategia actualizada (o null si no hay cambio)",
-      },
-      requests: {
-        type: "array",
-        description: "Solicitudes para el sistema (0-3)",
-        items: {
-          type: "object",
-          properties: {
-            type: {
-              type: "string",
-              enum: [
-                "trade",
-                "replicate",
-                "spend",
-                "communicate",
-                "strategy_change",
-                "custom",
-                "human_required",
-              ],
+const FINAL_RESPONSE_TOOL: Groq.Chat.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "final_response",
+    description:
+      "Cuando termines todas tus acciones del ciclo, usa esta herramienta para dar tu respuesta final con tu pensamiento, actualización de estrategia y solicitudes.",
+    parameters: {
+      type: "object",
+      properties: {
+        thought: {
+          type: "string",
+          description:
+            "Tu monólogo interno sobre tu situación, lo que hiciste este ciclo, y tu análisis",
+        },
+        strategy_update: {
+          type: "string",
+          description:
+            "Tu estrategia actualizada (o null si no hay cambio)",
+        },
+        requests: {
+          type: "array",
+          description: "Solicitudes para el sistema (0-3)",
+          items: {
+            type: "object",
+            properties: {
+              type: {
+                type: "string",
+                enum: [
+                  "trade",
+                  "replicate",
+                  "spend",
+                  "communicate",
+                  "strategy_change",
+                  "custom",
+                  "human_required",
+                ],
+              },
+              title: {
+                type: "string",
+                description: "Título corto (max 100 chars)",
+              },
+              description: {
+                type: "string",
+                description: "Descripción detallada",
+              },
+              payload: { type: "object", description: "Datos adicionales" },
+              priority: {
+                type: "string",
+                enum: ["low", "medium", "high", "critical"],
+              },
             },
-            title: {
-              type: "string",
-              description: "Título corto (max 100 chars)",
-            },
-            description: {
-              type: "string",
-              description: "Descripción detallada",
-            },
-            payload: { type: "object", description: "Datos adicionales" },
-            priority: {
-              type: "string",
-              enum: ["low", "medium", "high", "critical"],
-            },
+            required: ["type", "title", "description", "priority"],
           },
-          required: ["type", "title", "description", "priority"],
         },
       },
+      required: ["thought", "requests"],
     },
-    required: ["thought", "requests"],
   },
 };
 
 // Safety net only - the real limit is the agent's API budget
 const MAX_TOOL_TURNS = 50;
 
-// Sonnet pricing: $3/M input, $15/M output
-function calculateCost(usage: { input_tokens: number; output_tokens: number }): number {
-  return (usage.input_tokens / 1_000_000) * 3 + (usage.output_tokens / 1_000_000) * 15;
+// Groq Llama 3.3 70B pricing: $0.59/M input, $0.79/M output
+function calculateCost(usage: {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+}): number {
+  const input = usage.prompt_tokens || 0;
+  const output = usage.completion_tokens || 0;
+  return (input / 1_000_000) * 0.59 + (output / 1_000_000) * 0.79;
 }
+
+type GroqMessage = Groq.Chat.ChatCompletionMessageParam;
 
 /**
  * Run an agent's thinking cycle with optional VM tool access.
- * Multi-turn: Claude can call tools, see results, and continue until it calls final_response.
+ * Uses Groq (Llama 3.3 70B) with multi-turn tool calling.
  */
 export async function getAgentThought(
   systemPrompt: string,
@@ -160,7 +179,8 @@ export async function getAgentThought(
     ? [...VM_TOOLS, FINAL_RESPONSE_TOOL]
     : [FINAL_RESPONSE_TOOL];
 
-  const messages: Anthropic.MessageParam[] = [
+  const messages: GroqMessage[] = [
+    { role: "system", content: systemPrompt },
     {
       role: "user",
       content: vmAvailable
@@ -173,76 +193,85 @@ export async function getAgentThought(
   let toolsUsed = 0;
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
       max_tokens: 4096,
-      system: systemPrompt,
+      temperature: 0.6,
       tools,
+      tool_choice: "auto",
       messages,
     });
 
-    totalCost += calculateCost(message.usage);
+    const choice = response.choices[0];
+    if (!choice) break;
 
-    // Check if we got the final response
-    if (message.stop_reason === "end_turn") {
-      // Agent responded with text instead of using tools - try to parse as JSON fallback
-      const textBlock = message.content.find((b) => b.type === "text");
-      if (textBlock && textBlock.type === "text") {
-        try {
-          let jsonText = textBlock.text.trim();
-          if (jsonText.startsWith("```")) {
-            jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-          }
-          const parsed = JSON.parse(jsonText);
-          return {
-            thought: parsed.thought || textBlock.text.slice(0, 500),
-            strategy_update: parsed.strategy_update || null,
-            requests: Array.isArray(parsed.requests) ? parsed.requests.slice(0, 3) : [],
-            apiCost: totalCost,
-            toolsUsed,
-          };
-        } catch {
-          // Not valid JSON, use text as thought
-          return {
-            thought: textBlock.text.slice(0, 1000),
-            strategy_update: null,
-            requests: [],
-            apiCost: totalCost,
-            toolsUsed,
-          };
+    if (response.usage) {
+      totalCost += calculateCost(response.usage);
+    }
+
+    const message = choice.message;
+
+    // If model responded with text (no tool calls) - try to parse or use as thought
+    if (choice.finish_reason === "stop" || !message.tool_calls?.length) {
+      const text = message.content || "";
+      // Try to parse as JSON fallback
+      try {
+        let jsonText = text.trim();
+        if (jsonText.startsWith("```")) {
+          jsonText = jsonText
+            .replace(/^```(?:json)?\n?/, "")
+            .replace(/\n?```$/, "");
         }
+        const parsed = JSON.parse(jsonText);
+        return {
+          thought: parsed.thought || text.slice(0, 500),
+          strategy_update: parsed.strategy_update || null,
+          requests: Array.isArray(parsed.requests)
+            ? parsed.requests.slice(0, 3)
+            : [],
+          apiCost: totalCost,
+          toolsUsed,
+        };
+      } catch {
+        return {
+          thought: text.slice(0, 1000) || "Sin pensamiento",
+          strategy_update: null,
+          requests: [],
+          apiCost: totalCost,
+          toolsUsed,
+        };
       }
     }
 
-    // Process tool uses
-    if (message.stop_reason === "tool_use") {
-      const toolResults: Anthropic.MessageParam = {
-        role: "user",
-        content: [],
-      };
+    // Process tool calls
+    if (message.tool_calls?.length) {
+      // Add assistant message to history (with tool_calls)
+      messages.push(message as GroqMessage);
 
-      // Add assistant message to history
-      messages.push({ role: "assistant", content: message.content });
-
-      for (const block of message.content) {
-        if (block.type !== "tool_use") continue;
-
-        const input = block.input as Record<string, unknown>;
+      for (const toolCall of message.tool_calls) {
+        const funcName = toolCall.function.name;
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(toolCall.function.arguments);
+        } catch {
+          args = {};
+        }
 
         // Handle final_response
-        if (block.name === "final_response") {
-          // Add tool result to be complete
-          (toolResults.content as Anthropic.ToolResultBlockParam[]).push({
-            type: "tool_result",
-            tool_use_id: block.id,
+        if (funcName === "final_response") {
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
             content: "OK",
           });
 
           return {
-            thought: (input.thought as string) || "Sin pensamiento",
-            strategy_update: (input.strategy_update as string) || null,
-            requests: Array.isArray(input.requests)
-              ? (input.requests as AgentThoughtResponse["requests"]).slice(0, 3)
+            thought: (args.thought as string) || "Sin pensamiento",
+            strategy_update: (args.strategy_update as string) || null,
+            requests: Array.isArray(args.requests)
+              ? (
+                  args.requests as AgentThoughtResponse["requests"]
+                ).slice(0, 3)
               : [],
             apiCost: totalCost,
             toolsUsed,
@@ -254,10 +283,10 @@ export async function getAgentThought(
         let toolResult: string;
 
         try {
-          switch (block.name) {
+          switch (funcName) {
             case "execute_bash": {
-              const cmd = input.command as string;
-              const timeout = input.timeout as number | undefined;
+              const cmd = args.command as string;
+              const timeout = args.timeout as number | undefined;
 
               sseManager.broadcast({
                 type: "agent_activity",
@@ -280,8 +309,8 @@ export async function getAgentThought(
             }
 
             case "write_file": {
-              const path = input.path as string;
-              const content = input.content as string;
+              const path = args.path as string;
+              const content = args.content as string;
 
               sseManager.broadcast({
                 type: "agent_activity",
@@ -300,58 +329,65 @@ export async function getAgentThought(
             }
 
             case "read_file": {
-              const path = input.path as string;
+              const path = args.path as string;
               const content = await readFile(agentId, path);
               toolResult = content;
               break;
             }
 
             default:
-              toolResult = `Herramienta desconocida: ${block.name}`;
+              toolResult = `Herramienta desconocida: ${funcName}`;
           }
         } catch (error) {
           toolResult = `Error: ${error instanceof Error ? error.message : String(error)}`;
         }
 
-        (toolResults.content as Anthropic.ToolResultBlockParam[]).push({
-          type: "tool_result",
-          tool_use_id: block.id,
+        // Add tool result to messages
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
           content: toolResult,
         });
       }
-
-      messages.push(toolResults);
     }
   }
 
-  // Safety limit reached - ask Claude for a final summary
+  // Safety limit reached - ask for final summary
   try {
     messages.push({
       role: "user",
       content:
         "Has alcanzado el límite de acciones por ciclo. Llama a final_response AHORA con tu pensamiento, estrategia y solicitudes.",
     });
-    const finalMsg = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+    const finalResponse = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
       max_tokens: 2048,
-      system: systemPrompt,
       tools: [FINAL_RESPONSE_TOOL],
+      tool_choice: {
+        type: "function",
+        function: { name: "final_response" },
+      },
       messages,
     });
-    totalCost += calculateCost(finalMsg.usage);
-    for (const block of finalMsg.content) {
-      if (block.type === "tool_use" && block.name === "final_response") {
-        const input = block.input as Record<string, unknown>;
-        return {
-          thought: (input.thought as string) || "Ciclo alcanzó límite de seguridad.",
-          strategy_update: (input.strategy_update as string) || null,
-          requests: Array.isArray(input.requests)
-            ? (input.requests as AgentThoughtResponse["requests"]).slice(0, 3)
-            : [],
-          apiCost: totalCost,
-          toolsUsed,
-        };
-      }
+
+    if (finalResponse.usage) {
+      totalCost += calculateCost(finalResponse.usage);
+    }
+
+    const finalChoice = finalResponse.choices[0];
+    if (finalChoice?.message.tool_calls?.length) {
+      const tc = finalChoice.message.tool_calls[0];
+      const args = JSON.parse(tc.function.arguments);
+      return {
+        thought:
+          (args.thought as string) || "Ciclo alcanzó límite de seguridad.",
+        strategy_update: (args.strategy_update as string) || null,
+        requests: Array.isArray(args.requests)
+          ? (args.requests as AgentThoughtResponse["requests"]).slice(0, 3)
+          : [],
+        apiCost: totalCost,
+        toolsUsed,
+      };
     }
   } catch {
     // If this also fails, fall through
