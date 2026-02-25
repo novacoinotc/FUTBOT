@@ -14,6 +14,7 @@ from data.candles import CandleStore
 from data.orderbook import OrderBookStore
 from data.stream_manager import StreamManager
 from data.futures_data import FuturesDataFetcher
+from data.history_loader import load_historical_candles
 from db.database import Database
 from strategy.market_analyzer import MarketAnalyzer
 from ai.claude_trader import ClaudeTrader
@@ -99,6 +100,19 @@ class TradingEngine:
         await self.sentiment.fetch_news()
         self.market_analyzer.set_sentiment(self.sentiment.current_sentiment)
         self.market_analyzer.set_fear_greed(self.sentiment.fear_greed or 50)
+
+        # Load historical candles via proxy (eliminates 14-min warmup)
+        try:
+            loaded = await load_historical_candles(
+                self.candle_store, self.pairs,
+                timeframes=["1m", "5m"], limit=499,
+            )
+            if loaded > 0:
+                logger.info(f"Historical candles loaded: {loaded} total, ready to analyze immediately")
+            else:
+                logger.info("No historical candles loaded, will accumulate from WebSocket (~14 min)")
+        except Exception as e:
+            logger.warning(f"Historical candle loading failed: {e}")
 
         # Fetch initial futures data
         try:

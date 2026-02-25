@@ -6,11 +6,18 @@ from typing import Optional
 
 import httpx
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
-# Use fapi.binance.com - if 451, try fapi1.binance.com or fapi.binance.me
+# Use fapi.binance.com - if 451, try fapi1.binance.com
 BINANCE_FAPI = "https://fapi.binance.com"
 BINANCE_FAPI_ALT = "https://fapi1.binance.com"
+
+
+def _get_proxy() -> Optional[str]:
+    """Get proxy URL from settings if configured."""
+    return settings.proxy_url if settings.proxy_url else None
 
 
 class FuturesDataFetcher:
@@ -29,8 +36,9 @@ class FuturesDataFetcher:
         if self._geo_restricted:
             return  # skip if we know it's blocked
 
+        proxy = _get_proxy()
         base_url = BINANCE_FAPI
-        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, proxy=proxy) as client:
             # Test connectivity first
             try:
                 test = await client.get(f"{base_url}/fapi/v1/premiumIndex", params={"symbol": "BTCUSDT"})
@@ -40,11 +48,14 @@ class FuturesDataFetcher:
                     test2 = await client.get(f"{base_url}/fapi/v1/premiumIndex", params={"symbol": "BTCUSDT"})
                     if test2.status_code in (451, 302, 403):
                         self._geo_restricted = True
-                        logger.warning("Binance REST API geo-restricted from this VPS. Using WebSocket markPrice for funding rates.")
+                        via = " (via proxy)" if proxy else ""
+                        logger.warning(f"Binance REST API geo-restricted{via}. Using WebSocket markPrice for funding rates.")
                         return
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Binance REST connectivity test failed: {e}")
                 return
 
+            logger.info(f"Binance REST API accessible via {base_url}" + (" (proxy)" if proxy else ""))
             await self._fetch_funding_rates(client, pairs, base_url)
             await self._fetch_open_interest(client, pairs, base_url)
             top_pairs = [p for p in pairs if p in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")]
@@ -62,16 +73,20 @@ class FuturesDataFetcher:
             resp.raise_for_status()
             data = resp.json()
             pair_set = set(pairs)
+            count = 0
             for item in data:
                 symbol = item["symbol"]
                 if symbol in pair_set:
                     rate = float(item.get("lastFundingRate", 0))
                     self._funding_rates[symbol] = rate
+                    count += 1
+            logger.info(f"Fetched funding rates for {count} pairs")
         except Exception as e:
             logger.warning(f"Funding rate fetch error: {e}")
 
     async def _fetch_open_interest(self, client: httpx.AsyncClient, pairs: list[str], base_url: str = BINANCE_FAPI):
         """Fetch open interest for pairs."""
+        count = 0
         for pair in pairs[:10]:  # limit to top 10 to avoid rate limits
             try:
                 resp = await client.get(
@@ -85,11 +100,15 @@ class FuturesDataFetcher:
                 oi = float(data.get("openInterest", 0))
                 self._prev_open_interest[pair] = self._open_interest.get(pair, oi)
                 self._open_interest[pair] = oi
+                count += 1
             except Exception as e:
                 logger.debug(f"OI fetch error for {pair}: {e}")
+        if count:
+            logger.info(f"Fetched OI for {count} pairs")
 
     async def _fetch_long_short_ratios(self, client: httpx.AsyncClient, pairs: list[str], base_url: str = BINANCE_FAPI):
         """Fetch top trader long/short ratio."""
+        count = 0
         for pair in pairs:
             try:
                 resp = await client.get(
@@ -102,8 +121,11 @@ class FuturesDataFetcher:
                 data = resp.json()
                 if data:
                     self._long_short_ratios[pair] = float(data[0].get("longShortRatio", 1.0))
+                    count += 1
             except Exception as e:
                 logger.debug(f"L/S ratio fetch error for {pair}: {e}")
+        if count:
+            logger.info(f"Fetched L/S ratios for {count} pairs")
 
     def get_funding_rate(self, pair: str) -> Optional[float]:
         return self._funding_rates.get(pair)

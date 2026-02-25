@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # CryptoPanic
     cryptopanic_api_key: str = ""
 
+    # Proxy (for Binance REST API geo-restriction bypass)
+    proxy_url: str = ""  # e.g., "http://user:pass@host:port"
+
     # Paper trading
     paper_trading: bool = True
     initial_balance: float = 5000.0
