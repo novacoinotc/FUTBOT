@@ -13,6 +13,7 @@ from core.models import ActionType, MarketRegime
 from data.candles import CandleStore
 from data.orderbook import OrderBookStore
 from data.stream_manager import StreamManager
+from data.futures_data import FuturesDataFetcher
 from db.database import Database
 from strategy.market_analyzer import MarketAnalyzer
 from ai.claude_trader import ClaudeTrader
@@ -39,6 +40,7 @@ class TradingEngine:
         self.candle_store = CandleStore()
         self.orderbook_store = OrderBookStore()
         self.stream_manager: Optional[StreamManager] = None
+        self.futures_data = FuturesDataFetcher()
 
         # Strategy
         self.market_analyzer = MarketAnalyzer(self.candle_store, self.orderbook_store)
@@ -69,7 +71,7 @@ class TradingEngine:
     async def start(self):
         """Initialize all components and start the trading loop."""
         logger.info("=" * 60)
-        logger.info("TRADING ENGINE STARTING")
+        logger.info("TRADING ENGINE STARTING - SKYNET MODE")
         logger.info("=" * 60)
 
         # Connect DB
@@ -96,12 +98,21 @@ class TradingEngine:
         self.market_analyzer.set_sentiment(self.sentiment.current_sentiment)
         self.market_analyzer.set_fear_greed(self.sentiment.fear_greed or 50)
 
-        # Start WebSocket streams
+        # Fetch initial futures data
+        try:
+            await self.futures_data.fetch_all(self.pairs)
+            self._update_futures_data()
+            logger.info("Initial futures data loaded (OI, funding rates)")
+        except Exception as e:
+            logger.warning(f"Initial futures data fetch failed: {e}")
+
+        # Start WebSocket streams (includes markPrice for funding rates)
         self.stream_manager = StreamManager(
             pairs=self.pairs,
             on_kline=self._on_kline,
             on_book_ticker=self._on_book_ticker,
             on_agg_trade=self._on_agg_trade,
+            on_mark_price=self._on_mark_price,
         )
         await self.stream_manager.start()
 
@@ -121,6 +132,8 @@ class TradingEngine:
             self._optimization_loop(),
             self._daily_stats_loop(),
             self._health_check_loop(),
+            self._futures_data_loop(),
+            self._funding_rate_loop(),
         )
 
     async def stop(self):
@@ -142,38 +155,105 @@ class TradingEngine:
     # --- WebSocket Handlers ---
 
     async def _on_kline(self, data: dict):
-        """Handle incoming kline data."""
+        """Handle incoming kline data - check SL/TP/liquidation on EVERY update."""
         self.candle_store.update_from_kline(data)
 
-        # Check SL/TP on every price update
         pair = data["s"]
         kline = data["k"]
         price = float(kline["c"])
+        high = float(kline["h"])
+        low = float(kline["l"])
 
+        # Update position with latest price
         self.paper_trader.update_position_price(pair, price)
 
-        trigger = self.paper_trader.check_stop_loss_take_profit(pair, price)
-        if trigger:
-            reason = f"Stop loss hit" if trigger == "sl" else "Take profit hit"
-            trade = await self.paper_trader.close_position(pair, price, reason)
-            if trade:
-                indicators = {}
-                await self.memory.record_trade(trade, indicators, self._current_regime)
+        # Update trailing stops
+        self.paper_trader.update_trailing_stops(pair)
+
+        # Check SL/TP/liquidation using candle HIGH and LOW (not just close)
+        # This catches intra-candle wicks
+        position = self.paper_trader.positions.get(pair)
+        if position:
+            trigger = None
+            if position.direction.value == "LONG":
+                # For longs, check if LOW went below SL or liq
+                trigger = self.paper_trader.check_stop_loss_take_profit(pair, low)
+                if not trigger:
+                    trigger = self.paper_trader.check_stop_loss_take_profit(pair, high)
+            else:
+                # For shorts, check if HIGH went above SL or liq
+                trigger = self.paper_trader.check_stop_loss_take_profit(pair, high)
+                if not trigger:
+                    trigger = self.paper_trader.check_stop_loss_take_profit(pair, low)
+
+            if not trigger:
+                trigger = self.paper_trader.check_stop_loss_take_profit(pair, price)
+
+            if trigger:
+                if trigger == "liq":
+                    reason = f"LIQUIDATED at {price:.4f}"
+                    # On liquidation, you lose the entire margin
+                    trade = await self.paper_trader.close_position(pair, position.liquidation_price, reason)
+                elif trigger == "sl":
+                    reason = f"Stop loss hit at {price:.4f}"
+                    trade = await self.paper_trader.close_position(pair, position.stop_loss, reason)
+                elif trigger == "tp":
+                    reason = f"Take profit hit at {price:.4f}"
+                    trade = await self.paper_trader.close_position(pair, position.take_profit, reason)
+                else:
+                    trade = await self.paper_trader.close_position(pair, price, trigger)
+
+                if trade:
+                    indicators = {}
+                    await self.memory.record_trade(trade, indicators, self._current_regime)
 
     async def _on_book_ticker(self, data: dict):
         """Handle incoming order book ticker."""
         self.orderbook_store.update_from_book_ticker(data)
 
+        # Also check SL/TP from book ticker (more frequent than klines)
+        pair = data["s"]
+        if pair in self.paper_trader.positions:
+            mid = (float(data["b"]) + float(data["a"])) / 2
+            self.paper_trader.update_position_price(pair, mid)
+            self.paper_trader.update_trailing_stops(pair)
+
+            trigger = self.paper_trader.check_stop_loss_take_profit(pair, mid)
+            if trigger:
+                reason = f"{'Liquidation' if trigger == 'liq' else 'SL' if trigger == 'sl' else 'TP'} from book ticker"
+                trade = await self.paper_trader.close_position(pair, mid, reason)
+                if trade:
+                    await self.memory.record_trade(trade, {}, self._current_regime)
+
     async def _on_agg_trade(self, data: dict):
-        """Handle aggregate trade data (used for volume tracking)."""
-        pass  # Volume is already tracked in candles
+        """Handle aggregate trade data - real-time SL/TP checking."""
+        pair = data["s"]
+        if pair not in self.paper_trader.positions:
+            return
+
+        price = float(data["p"])
+        self.paper_trader.update_position_price(pair, price)
+        self.paper_trader.update_trailing_stops(pair)
+
+        trigger = self.paper_trader.check_stop_loss_take_profit(pair, price)
+        if trigger:
+            reason = f"{'Liquidation' if trigger == 'liq' else 'SL' if trigger == 'sl' else 'TP'} from trade tick"
+            trade = await self.paper_trader.close_position(pair, price, reason)
+            if trade:
+                await self.memory.record_trade(trade, {}, self._current_regime)
+
+    async def _on_mark_price(self, data: dict):
+        """Handle markPrice stream - extract funding rates in real-time."""
+        pair = data.get("s", "")
+        funding_rate = float(data.get("r", 0))  # current funding rate
+        if pair and funding_rate:
+            self.market_analyzer.set_funding_rate(pair, funding_rate)
 
     # --- Main Analysis Loop ---
 
     async def _analysis_loop(self):
-        """Main loop: analyze each pair every ~60 seconds."""
-        # Wait for data to accumulate
-        await asyncio.sleep(30)
+        """Main loop: analyze each pair every ~30 seconds."""
+        await asyncio.sleep(30)  # wait for data
 
         while self._running:
             try:
@@ -182,6 +262,13 @@ class TradingEngine:
 
                 params = await self.db.get_current_params()
                 self.risk_manager.update_params(params)
+
+                # Update fear/greed in risk manager
+                if self.sentiment.fear_greed:
+                    self.risk_manager.update_fear_greed(self.sentiment.fear_greed)
+
+                # Fast regime detection every cycle
+                self._current_regime = self.market_analyzer.get_market_regime_consensus(self.pairs)
 
                 active_pairs = self.candle_store.pairs_with_data
                 if not active_pairs:
@@ -200,7 +287,7 @@ class TradingEngine:
                         break
 
                     await self._analyze_pair(pair, params)
-                    await asyncio.sleep(1)  # small delay between pairs
+                    await asyncio.sleep(0.5)  # faster between pairs
 
                 self._analysis_count += 1
                 await asyncio.sleep(settings.analysis_interval_seconds)
@@ -226,7 +313,7 @@ class TradingEngine:
         # Check circuit breaker
         cb_active, cb_reason = self.circuit_breaker.check(self.paper_trader.total_equity)
 
-        # Get win-rate statistics for this pair + regime
+        # Get win-rate statistics
         pattern_stats = await self.memory.get_pattern_stats(
             pair=pair, direction="", market_regime=regime
         )
@@ -249,6 +336,7 @@ class TradingEngine:
             open_positions=len(self.paper_trader.positions),
             has_position_for_pair=has_position,
             circuit_breaker_active=cb_active,
+            margin_ratio=self.paper_trader.margin_ratio,
         )
 
         if not is_valid:
@@ -262,6 +350,11 @@ class TradingEngine:
         if decision.action in (ActionType.ENTER_LONG, ActionType.ENTER_SHORT):
             position = await self.paper_trader.open_position(decision, price)
             if position:
+                # Enable trailing stop based on ATR
+                atr = snapshot.atr_14
+                if atr:
+                    self.paper_trader.set_trailing_stop(pair, atr * 1.5)
+
                 # Store indicators with the trade
                 indicators = snapshot.model_dump(exclude_none=True, exclude={"timestamp"})
                 await self.db.update_trade(position.id, {
@@ -285,6 +378,62 @@ class TradingEngine:
                     position.take_profit = decision.take_profit
                 logger.info(f"[{pair}] Adjusted: SL={position.stop_loss} TP={position.take_profit}")
 
+    # --- Futures Data Loop ---
+
+    async def _futures_data_loop(self):
+        """Fetch OI, funding rates, L/S ratios every 5 minutes."""
+        await asyncio.sleep(60)  # wait for startup
+
+        while self._running:
+            try:
+                await self.futures_data.fetch_all(self.pairs)
+                self._update_futures_data()
+                logger.info("Futures data updated (OI, funding rates, L/S ratios)")
+            except Exception as e:
+                logger.error(f"Futures data loop error: {e}")
+
+            await asyncio.sleep(settings.futures_data_poll_minutes * 60)
+
+    def _update_futures_data(self):
+        """Push futures data into market analyzer."""
+        for pair in self.pairs:
+            rate = self.futures_data.get_funding_rate(pair)
+            if rate is not None:
+                self.market_analyzer.set_funding_rate(pair, rate)
+
+            oi = self.futures_data.get_open_interest(pair)
+            if oi is not None:
+                oi_change = self.futures_data.get_open_interest_change_pct(pair)
+                self.market_analyzer.set_open_interest(pair, oi, oi_change)
+
+            ls_ratio = self.futures_data.get_long_short_ratio(pair)
+            if ls_ratio is not None:
+                self.market_analyzer.set_long_short_ratio(pair, ls_ratio)
+
+    # --- Funding Rate Application Loop ---
+
+    async def _funding_rate_loop(self):
+        """Apply funding rates to open positions. Binance charges every 8h."""
+        await asyncio.sleep(120)  # wait for data
+
+        while self._running:
+            try:
+                for pair, position in list(self.paper_trader.positions.items()):
+                    rate = self.futures_data.get_funding_rate(pair)
+                    if rate is not None and rate != 0:
+                        hold_hours = (datetime.utcnow() - position.opened_at).total_seconds() / 3600
+                        # Apply proportional funding: full rate every 8h
+                        # Check interval is 30 min, so apply 30/480 = 6.25% of rate
+                        check_minutes = settings.funding_rate_check_minutes
+                        fraction = check_minutes / (8 * 60)
+                        proportional_rate = rate * fraction
+                        self.paper_trader.apply_funding_rate(pair, proportional_rate)
+
+            except Exception as e:
+                logger.error(f"Funding rate loop error: {e}")
+
+            await asyncio.sleep(settings.funding_rate_check_minutes * 60)
+
     # --- Sentiment Loop ---
 
     async def _sentiment_loop(self):
@@ -297,9 +446,15 @@ class TradingEngine:
                     self.market_analyzer.set_sentiment(news)
                     if fg:
                         self.market_analyzer.set_fear_greed(fg)
+                        self.risk_manager.update_fear_greed(fg)
 
+                    # Breaking news integration
                     if self.sentiment.has_breaking_news:
-                        logger.warning(f"BREAKING NEWS: {self.sentiment.breaking_headlines}")
+                        headlines = "; ".join(self.sentiment.breaking_headlines[:2])
+                        self.market_analyzer.set_breaking_news(headlines)
+                        logger.warning(f"BREAKING NEWS: {headlines}")
+                    else:
+                        self.market_analyzer.set_breaking_news(None)
 
             except Exception as e:
                 logger.error(f"Sentiment loop error: {e}")
@@ -309,14 +464,14 @@ class TradingEngine:
     # --- Deep Analysis Loop ---
 
     async def _deep_analysis_loop(self):
-        """Run deep analysis with Claude Sonnet every 4 hours."""
-        await asyncio.sleep(60)  # wait for initial data
+        """Run deep analysis with Claude Sonnet every 2 hours."""
+        await asyncio.sleep(60)
 
         while self._running:
             try:
-                recent_trades = await self.db.get_trades(status="closed", limit=30)
+                recent_trades = await self.db.get_trades(status="closed", limit=50)
                 if recent_trades:
-                    memories = await self.memory.get_recent_memories(limit=10)
+                    memories = await self.memory.get_recent_memories(limit=15)
                     params = await self.db.get_current_params()
                     market_summary = self.market_analyzer.get_market_summary(self.pairs)
 
@@ -344,6 +499,9 @@ class TradingEngine:
                                 confidence=rule.get("confidence", 0.5),
                             )
 
+                        # Cleanup poor-performing rules
+                        await self.memory.cleanup_rules()
+
                         logger.info(f"Deep analysis complete. Regime: {regime}, Reviews: {len(reviews)}")
 
                 self._last_deep_analysis = datetime.utcnow()
@@ -356,8 +514,8 @@ class TradingEngine:
     # --- Optimization Loop ---
 
     async def _optimization_loop(self):
-        """Run optimizer every 6 hours."""
-        await asyncio.sleep(120)  # wait for some trades
+        """Run optimizer every 4 hours."""
+        await asyncio.sleep(120)
 
         while self._running:
             try:
@@ -396,6 +554,17 @@ class TradingEngine:
             try:
                 if self.stream_manager and self.stream_manager.seconds_since_last_message > 60:
                     logger.warning("No WebSocket data for >60s, streams may be disconnected")
+
+                # Log periodic status
+                if self._analysis_count > 0 and self._analysis_count % 10 == 0:
+                    equity = self.paper_trader.total_equity
+                    pnl = equity - self.paper_trader.initial_balance
+                    positions = len(self.paper_trader.positions)
+                    logger.info(
+                        f"Status: equity=${equity:.2f} pnl=${pnl:.2f} "
+                        f"positions={positions} regime={self._current_regime.value} "
+                        f"cycles={self._analysis_count}"
+                    )
 
             except Exception as e:
                 logger.error(f"Health check error: {e}")

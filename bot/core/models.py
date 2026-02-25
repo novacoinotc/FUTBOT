@@ -64,9 +64,27 @@ class MarketSnapshot(BaseModel):
     adx: Optional[float] = None  # trend strength (>25 = trending)
     plus_di: Optional[float] = None
     minus_di: Optional[float] = None
-    mfi: Optional[float] = None  # money flow index (volume-weighted RSI)
+    mfi: Optional[float] = None  # money-weighted RSI
     bb_width: Optional[float] = None
     bb_squeeze: Optional[bool] = None  # tight bands = breakout imminent
+    # Advanced scalping features
+    spread_pct: Optional[float] = None  # bid-ask spread as % of price
+    ema_alignment: Optional[float] = None  # -1 to +1, bullish/bearish stack
+    rsi_divergence: Optional[str] = None  # bullish_div, bearish_div, none
+    consecutive_direction: Optional[int] = None  # +3 = 3 green candles, -2 = 2 red
+    price_position_range: Optional[float] = None  # 0-1 position in 20m high/low
+    volume_buy_ratio: Optional[float] = None  # 0-1, >0.5 = more buying
+    # Multi-timeframe (5m)
+    rsi_14_5m: Optional[float] = None
+    ema_trend_5m: Optional[str] = None  # above_all, below_all, mixed
+    adx_5m: Optional[float] = None
+    macd_signal_5m: Optional[str] = None
+    # Futures-specific
+    open_interest: Optional[float] = None  # total OI in contracts
+    open_interest_change_pct: Optional[float] = None  # OI change last 5m
+    long_short_ratio: Optional[float] = None  # top trader L/S ratio
+    # Breaking news
+    breaking_news: Optional[str] = None
     sentiment: Optional[dict] = None
     fear_greed: Optional[int] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -103,9 +121,16 @@ class Position(BaseModel):
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
     entry_fee: float = 0.0
+    funding_paid: float = 0.0  # total funding rate costs accumulated
     opened_at: datetime = Field(default_factory=datetime.utcnow)
     entry_reasoning: str = ""
     entry_indicators: Optional[dict] = None
+    # Trailing stop
+    trailing_stop_distance: Optional[float] = None  # ATR-based distance
+    highest_price: float = 0.0  # track peak for trailing SL on longs
+    lowest_price: float = 999999.0  # track trough for trailing SL on shorts
+    # Liquidation
+    liquidation_price: float = 0.0
 
 
 # --- Closed Trade ---

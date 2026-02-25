@@ -234,14 +234,34 @@ class Database:
         market_regime: str,
         limit: int = 5,
     ) -> list[dict]:
+        # First try exact match (pair AND regime)
         cursor = await self.db.execute(
             """SELECT * FROM trade_memory
-               WHERE pair = ? OR market_regime = ?
+               WHERE pair = ? AND market_regime = ?
                ORDER BY created_at DESC LIMIT ?""",
             [pair, market_regime, limit],
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        results = [dict(r) for r in rows]
+
+        # If not enough, supplement with same pair (any regime)
+        if len(results) < limit:
+            remaining = limit - len(results)
+            seen_ids = {r["id"] for r in results}
+            cursor = await self.db.execute(
+                """SELECT * FROM trade_memory
+                   WHERE pair = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                [pair, remaining + 5],
+            )
+            rows = await cursor.fetchall()
+            for r in rows:
+                row = dict(r)
+                if row["id"] not in seen_ids and len(results) < limit:
+                    results.append(row)
+                    seen_ids.add(row["id"])
+
+        return results
 
     async def get_recent_memories(self, limit: int = 20) -> list[dict]:
         cursor = await self.db.execute(
@@ -279,16 +299,47 @@ class Database:
         return [dict(r) for r in rows]
 
     async def update_rule_stats(self, rule_id: int, successful: bool):
-        field = "times_successful" if successful else "times_applied"
-        await self.db.execute(
-            f"""UPDATE learned_rules
-                SET times_applied = times_applied + 1,
-                    {f'times_successful = times_successful + 1,' if successful else ''}
-                    updated_at = ?
-                WHERE id = ?""",
-            [datetime.utcnow().isoformat(), rule_id],
-        )
+        if successful:
+            await self.db.execute(
+                """UPDATE learned_rules
+                    SET times_applied = times_applied + 1,
+                        times_successful = times_successful + 1,
+                        updated_at = ?
+                    WHERE id = ?""",
+                [datetime.utcnow().isoformat(), rule_id],
+            )
+        else:
+            await self.db.execute(
+                """UPDATE learned_rules
+                    SET times_applied = times_applied + 1,
+                        updated_at = ?
+                    WHERE id = ?""",
+                [datetime.utcnow().isoformat(), rule_id],
+            )
         await self.db.commit()
+
+    async def deactivate_poor_rules(self, min_applied: int = 5, max_success_rate: float = 0.35):
+        """Auto-deactivate rules with poor success rate."""
+        cursor = await self.db.execute(
+            """SELECT id, rule, times_applied, times_successful FROM learned_rules
+               WHERE active = 1 AND times_applied >= ?""",
+            [min_applied],
+        )
+        rows = await cursor.fetchall()
+        deactivated = 0
+        for r in rows:
+            row = dict(r)
+            rate = row["times_successful"] / row["times_applied"] if row["times_applied"] > 0 else 0
+            if rate < max_success_rate:
+                await self.db.execute(
+                    "UPDATE learned_rules SET active = 0, updated_at = ? WHERE id = ?",
+                    [datetime.utcnow().isoformat(), row["id"]],
+                )
+                deactivated += 1
+                logger.info(f"Deactivated poor rule #{row['id']}: '{row['rule'][:50]}' ({rate:.0%} success)")
+        if deactivated:
+            await self.db.commit()
+        return deactivated
 
     # --- Parameters ---
 

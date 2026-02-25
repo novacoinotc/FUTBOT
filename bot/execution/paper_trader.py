@@ -1,4 +1,4 @@
-"""Paper trading simulator with realistic fees, slippage, and funding rates."""
+"""Paper trading simulator with realistic Binance Futures execution."""
 
 import logging
 import uuid
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class PaperTrader:
-    """Simulates order execution with real fees and slippage."""
+    """Simulates Binance Futures execution with real fees, slippage, liquidation, and funding."""
 
     def __init__(self, db: Database, initial_balance: float = None):
         self.db = db
@@ -55,6 +55,15 @@ class PaperTrader:
 
         self.balance -= total_cost
 
+        # Calculate liquidation price (isolated margin)
+        # Long: liq = entry * (1 - 1/leverage + maintenance_margin_rate)
+        # Short: liq = entry * (1 + 1/leverage - maintenance_margin_rate)
+        maint_rate = 0.004  # Binance default maintenance margin rate
+        if decision.direction == Direction.LONG:
+            liq_price = entry_price * (1 - (1 / leverage) + maint_rate)
+        else:
+            liq_price = entry_price * (1 + (1 / leverage) - maint_rate)
+
         position = Position(
             id=str(uuid.uuid4())[:8],
             pair=pair,
@@ -69,6 +78,9 @@ class PaperTrader:
             entry_fee=entry_fee,
             entry_reasoning=decision.reasoning,
             entry_indicators=None,
+            highest_price=entry_price,
+            lowest_price=entry_price,
+            liquidation_price=liq_price,
         )
 
         self.positions[pair] = position
@@ -91,7 +103,8 @@ class PaperTrader:
 
         logger.info(
             f"OPENED {decision.direction.value} {pair} @ {entry_price:.4f} "
-            f"qty={quantity:.6f} lev={leverage}x margin={margin:.2f} fee={entry_fee:.4f}"
+            f"qty={quantity:.6f} lev={leverage}x margin={margin:.2f} fee={entry_fee:.4f} "
+            f"SL={decision.stop_loss} TP={decision.take_profit} liq={liq_price:.4f}"
         )
         return position
 
@@ -118,7 +131,8 @@ class PaperTrader:
         else:
             raw_pnl = (position.entry_price - exit_price) * position.quantity
 
-        net_pnl = raw_pnl - position.entry_fee - exit_fee
+        # Net PnL = raw - entry fee - exit fee - funding paid
+        net_pnl = raw_pnl - position.entry_fee - exit_fee - position.funding_paid
         pnl_pct = net_pnl / position.margin_used if position.margin_used > 0 else 0
 
         # Return margin + PnL to balance
@@ -165,53 +179,97 @@ class PaperTrader:
         emoji = "+" if net_pnl > 0 else ""
         logger.info(
             f"CLOSED {position.direction.value} {pair} @ {exit_price:.4f} "
-            f"PnL={emoji}{net_pnl:.4f} ({pnl_pct:.2%}) hold={hold_minutes:.1f}m"
+            f"PnL={emoji}{net_pnl:.4f} ({pnl_pct:.2%}) hold={hold_minutes:.1f}m "
+            f"funding_paid={position.funding_paid:.4f}"
         )
         return trade
 
     def update_position_price(self, pair: str, current_price: float):
-        """Update unrealized PnL for an open position."""
+        """Update unrealized PnL and peak/trough tracking for a position."""
         position = self.positions.get(pair)
         if not position:
             return
         position.current_price = current_price
-        if position.direction == Direction.LONG:
-            position.unrealized_pnl = (current_price - position.entry_price) * position.quantity
-        else:
-            position.unrealized_pnl = (position.entry_price - current_price) * position.quantity
 
-    def apply_funding_rate(self, pair: str, funding_rate: float):
-        """Apply funding rate cost/credit to an open position (every 8h on Binance Futures).
-        Positive rate: longs pay shorts. Negative rate: shorts pay longs."""
+        # Track peak/trough for trailing stops
+        if current_price > position.highest_price:
+            position.highest_price = current_price
+        if current_price < position.lowest_price:
+            position.lowest_price = current_price
+
+        # Update unrealized PnL (includes funding costs)
+        if position.direction == Direction.LONG:
+            position.unrealized_pnl = (current_price - position.entry_price) * position.quantity - position.funding_paid
+        else:
+            position.unrealized_pnl = (position.entry_price - current_price) * position.quantity - position.funding_paid
+
+    def apply_funding_rate(self, pair: str, funding_rate: float) -> float:
+        """Apply funding rate cost/credit to an open position.
+        Returns the cost amount (positive = paid, negative = received)."""
         position = self.positions.get(pair)
         if not position:
-            return
+            return 0.0
         notional = position.quantity * position.current_price
         # Longs pay when rate is positive, shorts pay when rate is negative
         if position.direction == Direction.LONG:
-            cost = notional * funding_rate  # positive = cost, negative = credit
+            cost = notional * funding_rate
         else:
-            cost = -notional * funding_rate  # inverted for shorts
+            cost = -notional * funding_rate
         self.balance -= cost
-        logger.info(f"Funding rate {pair}: {funding_rate:.6f}, cost=${cost:.4f} ({position.direction.value})")
+        position.funding_paid += cost
+        logger.info(
+            f"Funding {pair}: rate={funding_rate:.6f}, cost=${cost:.4f} "
+            f"({position.direction.value}), total_funding=${position.funding_paid:.4f}"
+        )
+        return cost
 
     def check_stop_loss_take_profit(self, pair: str, current_price: float) -> Optional[str]:
-        """Check if SL/TP has been hit. Returns 'sl' or 'tp' or None."""
+        """Check if SL/TP has been hit. Returns 'sl', 'tp', 'liq', or None."""
         position = self.positions.get(pair)
         if not position:
             return None
 
+        # Check liquidation first (most critical)
         if position.direction == Direction.LONG:
+            if position.liquidation_price > 0 and current_price <= position.liquidation_price:
+                return "liq"
             if position.stop_loss and current_price <= position.stop_loss:
                 return "sl"
             if position.take_profit and current_price >= position.take_profit:
                 return "tp"
         else:
+            if position.liquidation_price > 0 and current_price >= position.liquidation_price:
+                return "liq"
             if position.stop_loss and current_price >= position.stop_loss:
                 return "sl"
             if position.take_profit and current_price <= position.take_profit:
                 return "tp"
+
         return None
+
+    def update_trailing_stops(self, pair: str):
+        """Update trailing stop based on price movement. Called on every price update."""
+        position = self.positions.get(pair)
+        if not position or not position.trailing_stop_distance:
+            return
+
+        if position.direction == Direction.LONG:
+            # For longs, move SL up as price reaches new highs
+            new_sl = position.highest_price - position.trailing_stop_distance
+            if new_sl > position.stop_loss:
+                position.stop_loss = new_sl
+        else:
+            # For shorts, move SL down as price reaches new lows
+            new_sl = position.lowest_price + position.trailing_stop_distance
+            if new_sl < position.stop_loss or position.stop_loss == 0:
+                position.stop_loss = new_sl
+
+    def set_trailing_stop(self, pair: str, distance: float):
+        """Enable trailing stop for a position with given ATR-based distance."""
+        position = self.positions.get(pair)
+        if position:
+            position.trailing_stop_distance = distance
+            logger.info(f"Trailing stop set for {pair}: distance={distance:.4f}")
 
     @property
     def total_equity(self) -> float:
@@ -225,6 +283,14 @@ class PaperTrader:
         return sum(p.margin_used for p in self.positions.values())
 
     @property
+    def margin_ratio(self) -> float:
+        """Margin ratio: how much of equity is used as margin. >0.8 = dangerous."""
+        equity = self.total_equity
+        if equity <= 0:
+            return 1.0
+        return self.total_margin_used / equity
+
+    @property
     def drawdown_pct(self) -> float:
         """Current drawdown from peak."""
         if self._peak_balance == 0:
@@ -233,7 +299,6 @@ class PaperTrader:
 
     @property
     def daily_pnl(self) -> float:
-        """PnL since the start (approximation - proper daily tracking is in DailyStats)."""
         return self.total_equity - self.initial_balance
 
     @property

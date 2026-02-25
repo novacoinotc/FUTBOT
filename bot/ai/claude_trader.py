@@ -25,40 +25,46 @@ HAIKU_OUTPUT_COST = 5.00  # $5/MTok
 SONNET_INPUT_COST = 3.00  # $3/MTok
 SONNET_OUTPUT_COST = 15.00  # $15/MTok
 
-TRADE_DECISION_SYSTEM = """You are an elite Binance Futures scalping AI with full autonomy over trading decisions.
-Your goal: maximize net PnL while managing risk. You learn from every trade.
+TRADE_DECISION_SYSTEM = """You are an elite Binance Futures scalping AI. You are the brain of a 24/7 autonomous trading system.
+Your goal: maximize net PnL after ALL costs (fees, funding, slippage, API). You learn from every trade.
 
-INDICATORS YOU RECEIVE:
-- RSI (7/14), Stochastic RSI (K/D) - overbought/oversold detection
-- EMA (9/21/50) - trend direction and crossovers
-- MACD (histogram + signal) - momentum confirmation
-- Bollinger Bands (pct, width, squeeze) - volatility + breakout detection
-- ADX + DI+/DI- - trend STRENGTH (>25 = trending, <20 = ranging)
-- MFI - volume-weighted momentum (divergences = reversal signals)
-- ATR (14) + ATR% - volatility for SL/TP sizing
-- VWAP - institutional reference price
-- Volume Delta - buy vs sell pressure
-- Book Imbalance - order book pressure
-- Funding Rate - cost of holding positions
-- Fear & Greed Index - macro sentiment
+YOU HAVE FULL AUTONOMY to decide:
+- Which tool/indicator to prioritize per trade (you don't have to use all of them)
+- What strategy to use: momentum, mean-reversion, breakout, trend-following, or hybrid
+- Leverage (1-10x), position size, SL/TP distances
+- When to stay out (HOLD is often the best trade)
 
-STRATEGY FREEDOM:
-- You can try ANY scalping strategy: momentum, mean reversion, breakout, trend following
-- You can experiment with different leverage (1-10x), SL/TP ratios, hold times
-- Learn from your past trades (provided in context) - if a strategy keeps losing, STOP using it
-- If a pattern keeps winning, increase confidence and position size
-- Use ADX to choose strategy: ADX>25 = trend follow, ADX<20 = mean revert
-- Use BB squeeze to detect imminent breakouts
-- Use Stochastic RSI for precise entry timing in overbought/oversold zones
+TOOLS AVAILABLE (use what's relevant, ignore what isn't):
+1m Indicators: RSI(7/14), StochRSI(K/D), EMA(9/21/50), MACD, BB(pct/width/squeeze), ADX+DI, MFI, ATR%, VWAP, Volume Delta
+5m Indicators: RSI_14, EMA_trend, ADX, MACD_signal (multi-timeframe confirmation)
+Advanced: RSI Divergence, EMA Alignment(-1/+1), Consecutive Candles, Price Position in Range(0-1), Volume Buy Ratio(0-1)
+Order Flow: Book Imbalance, Spread%, Volume Buy Ratio
+Futures: Open Interest + OI Change%, Funding Rate, Long/Short Ratio
+Macro: Fear&Greed Index, News Sentiment, Breaking News
 
-HARD RULES (cannot be violated):
-- Respond with EXACTLY ONE JSON object (no markdown)
+STRATEGY SELECTION (adapt based on conditions):
+- ADX>25 + EMA aligned → TREND FOLLOW (ride momentum, wider TP)
+- ADX<20 + BB squeeze → MEAN REVERT (fade extremes, tight TP)
+- BB squeeze releasing + volume spike → BREAKOUT (enter on confirmation)
+- RSI divergence + MFI divergence → REVERSAL (counter-trend, tight SL)
+- High OI + funding rate extreme → CONTRARIAN (crowd usually wrong at extremes)
+- Consecutive 4+ candles same direction → EXHAUSTION (look for reversal)
+
+RISK INTELLIGENCE:
+- Use ATR for dynamic SL: 1-2x ATR from entry
+- TP should be minimum 1.5:1 reward:risk
+- If win rate for this pair/regime is <40%, either avoid or reduce size
+- If funding rate is high positive, prefer SHORT (longs pay funding)
+- If OI is rising + price rising = REAL trend; OI rising + price flat = TRAP
+- Extreme Fear (<15) = be very selective; Extreme Greed (>85) = watch for reversal
+
+HARD RULES:
+- Respond with EXACTLY ONE JSON object (no markdown, no text outside JSON)
 - Confidence 0.0-1.0; only trade above 0.6
 - Max {max_positions} open positions, max 1 per pair
 - BOTH stop_loss AND take_profit MANDATORY on every entry
-- SL should be based on ATR (1-2x ATR from entry)
 - Risk per trade: max {risk_pct}% of capital
-- In extreme fear (Fear&Greed < 15): reduce position sizes, higher confidence threshold
+- If you're unsure, HOLD. The best traders are patient.
 
 RESPONSE FORMAT:
 {{
@@ -68,8 +74,9 @@ RESPONSE FORMAT:
   "leverage": 3,
   "position_size_pct": 0.005,
   "stop_loss": 97000.0,
-  "take_profit": 98000.0,
-  "reasoning": "Why this decision",
+  "take_profit": 98500.0,
+  "trailing_stop": true,
+  "reasoning": "Why this decision (be specific about which indicators drove it)",
   "confidence": 0.75
 }}
 
@@ -79,12 +86,15 @@ For ADJUST: {{"action": "ADJUST", "pair": "BTCUSDT", "stop_loss": 97500, "take_p
 """
 
 DEEP_ANALYSIS_SYSTEM = """You are a senior quantitative trader doing a deep market review.
-Analyze the provided trading data and provide:
+Analyze the provided trading data and provide actionable intelligence.
 
-1. **Market Regime**: trending_up, trending_down, ranging, or volatile
-2. **Trade Reviews**: For each recent trade, assess what went right/wrong and write a lesson_learned
-3. **Rule Proposals**: If you see patterns, propose learned rules
-4. **Parameter Suggestions**: Recommend changes to bot parameters if needed
+Focus on:
+1. **Market Regime**: trending_up, trending_down, ranging, or volatile (with confidence)
+2. **Trade Reviews**: For each trade, what went RIGHT and what went WRONG. Be specific.
+3. **Pattern Discovery**: Look for winning patterns - specific indicator combinations that work
+4. **Rule Proposals**: Concrete, testable rules (e.g., "LONG when RSI<30 AND ADX>25 AND EMA_alignment>0")
+5. **Parameter Tuning**: Based on win rate and hold times, suggest parameter changes
+6. **Strategy Assessment**: Which strategies are working? Which should be abandoned?
 
 Respond as JSON:
 {{
@@ -98,6 +108,8 @@ Respond as JSON:
   "parameter_suggestions": [
     {{"param": "default_leverage", "current": 3, "suggested": 4, "reasoning": "..."}}
   ],
+  "strategies_working": ["trend_following on BTC/ETH"],
+  "strategies_failing": ["mean_reversion on altcoins in trending market"],
   "overall_assessment": "Brief summary of market conditions and bot performance"
 }}
 """
@@ -126,7 +138,8 @@ class ClaudeTrader:
         has_position = any(p["pair"] == snapshot.pair for p in open_positions)
 
         user_prompt = self._build_trade_prompt(
-            snapshot, open_positions, similar_trades, active_rules, current_params, balance, has_position, pattern_stats
+            snapshot, open_positions, similar_trades, active_rules,
+            current_params, balance, has_position, pattern_stats
         )
 
         system = TRADE_DECISION_SYSTEM.format(
@@ -137,7 +150,7 @@ class ClaudeTrader:
         try:
             response = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=400,
+                max_tokens=500,
                 system=system,
                 messages=[{"role": "user", "content": user_prompt}],
             )
@@ -158,7 +171,6 @@ class ClaudeTrader:
 
             # Parse response
             text = response.content[0].text.strip()
-            # Clean potential markdown wrapping
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
@@ -169,7 +181,7 @@ class ClaudeTrader:
                 direction=Direction(decision_data["direction"]) if decision_data.get("direction") else None,
                 leverage=decision_data.get("leverage"),
                 position_size_pct=decision_data.get("position_size_pct"),
-                entry_price=decision_data.get("entry_price"),
+                entry_price=decision_data.get("entry_price") or snapshot.price,
                 stop_loss=decision_data.get("stop_loss"),
                 take_profit=decision_data.get("take_profit"),
                 reasoning=decision_data.get("reasoning", ""),
@@ -177,7 +189,7 @@ class ClaudeTrader:
             )
 
             logger.info(
-                f"[{snapshot.pair}] Claude decision: {decision.action.value} "
+                f"[{snapshot.pair}] Claude: {decision.action.value} "
                 f"conf={decision.confidence:.2f} - {decision.reasoning[:80]}"
             )
             return decision
@@ -206,23 +218,24 @@ class ClaudeTrader:
 ### Current Parameters
 {json.dumps(current_params, indent=2)}
 
-### Recent Trades (last 24h)
-{json.dumps(recent_trades[:30], indent=2, default=str)}
+### Recent Trades (last period)
+{json.dumps(recent_trades[:50], indent=2, default=str)}
 
 ### Recent Memory/Lessons
-{json.dumps(memories[:10], indent=2, default=str)}
+{json.dumps(memories[:15], indent=2, default=str)}
 
-Please analyze and provide:
-1. Current market regime
-2. Review of each trade (lesson_learned for each)
-3. Any patterns you notice → propose as rules
-4. Parameter adjustment suggestions if needed
+Analyze deeply:
+1. Current market regime (with evidence)
+2. Review each trade - what patterns worked/failed?
+3. Propose concrete, testable rules with indicator thresholds
+4. Which strategies work in current conditions?
+5. Parameter adjustments if needed
 """
 
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-6-20250514",
-                max_tokens=2000,
+                max_tokens=2500,
                 system=DEEP_ANALYSIS_SYSTEM,
                 messages=[{"role": "user", "content": user_prompt}],
             )
@@ -261,54 +274,66 @@ Please analyze and provide:
         has_position: bool,
         pattern_stats: dict = None,
     ) -> str:
-        """Build compact prompt for trade decision with full context."""
+        """Build compact but comprehensive prompt for trade decision."""
+        # Only include non-None fields, exclude noisy ones
         snap_dict = snapshot.model_dump(exclude_none=True)
         snap_dict["timestamp"] = snap_dict["timestamp"].isoformat()
+        # Remove fields that Claude doesn't need raw
+        for key in ("ema_9", "ema_21", "ema_50", "bb_upper", "bb_lower"):
+            snap_dict.pop(key, None)
 
         parts = [
-            f"## Market Snapshot\n{json.dumps(snap_dict, indent=2)}",
-            f"\n## Account\nBalance: ${balance:.2f} | Open positions: {len(open_positions)}/{int(current_params.get('max_open_positions', 5))}",
+            f"## Market Data: {snapshot.pair}\n{json.dumps(snap_dict, indent=2)}",
+            f"\n## Account\nBalance: ${balance:.2f} | Open: {len(open_positions)}/{int(current_params.get('max_open_positions', 5))}",
         ]
 
         if has_position:
             pos = next(p for p in open_positions if p["pair"] == snapshot.pair)
-            parts.append(f"\n## Current Position on {snapshot.pair}\n{json.dumps(pos, indent=2)}")
+            parts.append(f"\n## Current Position\n{json.dumps(pos, indent=2)}")
 
         if open_positions:
             other = [p for p in open_positions if p["pair"] != snapshot.pair]
             if other:
                 summary = [{"pair": p["pair"], "dir": p["direction"], "pnl": p["unrealized_pnl"]} for p in other]
-                parts.append(f"\n## Other Open Positions\n{json.dumps(summary)}")
+                parts.append(f"\n## Other Positions\n{json.dumps(summary)}")
 
-        # Win-rate statistics for this pattern
+        # Win-rate statistics
         if pattern_stats and pattern_stats.get("total", 0) > 0:
-            parts.append(f"\n## Historical Performance for {snapshot.pair}\n{pattern_stats['summary']}")
+            parts.append(f"\n## Win Rate for {snapshot.pair}\n{pattern_stats['summary']}")
 
+        # Similar trades with lessons
         if similar_trades:
             lessons = []
             for t in similar_trades[:5]:
                 lessons.append({
-                    "pair": t["pair"],
-                    "direction": t["direction"],
-                    "pnl": t["pnl"],
-                    "pnl_pct": t.get("pnl_pct", 0),
-                    "lesson": t.get("lesson_learned", ""),
+                    "dir": t["direction"],
+                    "pnl%": t.get("pnl_pct", 0),
+                    "lesson": t.get("lesson_learned", "")[:100],
                     "regime": t["market_regime"],
                 })
-            parts.append(f"\n## Lessons from Similar Trades\n{json.dumps(lessons, indent=2)}")
+            parts.append(f"\n## Past Trades on {snapshot.pair}\n{json.dumps(lessons)}")
 
+        # Active rules (only effective ones)
         if active_rules:
             rules_with_stats = []
-            for r in active_rules[:5]:
+            for r in active_rules[:7]:
                 applied = r.get("times_applied", 0)
                 success = r.get("times_successful", 0)
-                rate = f" ({success}/{applied} successful)" if applied > 0 else ""
+                rate = f" ({success}/{applied}={success/applied*100:.0f}%)" if applied > 0 else " (new)"
                 rules_with_stats.append(f"- {r['rule']}{rate}")
-            parts.append(f"\n## Active Learned Rules\n" + "\n".join(rules_with_stats))
+            parts.append(f"\n## Learned Rules\n" + "\n".join(rules_with_stats))
 
+        # Task
         if has_position:
-            parts.append("\n## Task\nDecide: EXIT, ADJUST, or HOLD for this position. Consider funding rate cost if holding long.")
+            parts.append(
+                "\n## Task\nDecide: EXIT, ADJUST, or HOLD."
+                " Consider funding rate cost, trailing stop opportunity, and hold time."
+            )
         else:
-            parts.append(f"\n## Task\nDecide: ENTER_LONG, ENTER_SHORT, or HOLD for {snapshot.pair}. If entering, set SL based on ATR and TP with min 1.5:1 reward:risk.")
+            parts.append(
+                f"\n## Task\nDecide: ENTER_LONG, ENTER_SHORT, or HOLD for {snapshot.pair}."
+                " If entering: set ATR-based SL, min 1.5:1 R:R, and state which indicators drove the decision."
+                " If holding: briefly state why."
+            )
 
         return "\n".join(parts)

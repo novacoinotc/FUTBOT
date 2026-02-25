@@ -12,9 +12,13 @@ class RiskManager:
 
     def __init__(self, current_params: dict = None):
         self._params = current_params or {}
+        self._fear_greed: int = 50  # neutral default
 
     def update_params(self, params: dict):
         self._params = params
+
+    def update_fear_greed(self, value: int):
+        self._fear_greed = value
 
     def _get(self, key: str, default):
         return self._params.get(key, default)
@@ -26,6 +30,7 @@ class RiskManager:
         open_positions: int,
         has_position_for_pair: bool,
         circuit_breaker_active: bool,
+        margin_ratio: float = 0.0,
     ) -> tuple[bool, str]:
         """Validate a trade decision. Returns (is_valid, rejection_reason)."""
 
@@ -63,6 +68,10 @@ class RiskManager:
             if decision.confidence < min_score:
                 return False, f"Confidence {decision.confidence:.2f} below threshold {min_score}"
 
+            # Extreme fear enforcement: raise confidence threshold
+            if self._fear_greed < 15 and decision.confidence < 0.80:
+                return False, f"Extreme fear (F&G={self._fear_greed}): need confidence >= 0.80, got {decision.confidence:.2f}"
+
             # Leverage check
             max_lev = settings.max_leverage
             if decision.leverage and decision.leverage > max_lev:
@@ -73,12 +82,27 @@ class RiskManager:
             if pos_pct > settings.max_position_pct:
                 return False, f"Position size {pos_pct:.3%} exceeds max {settings.max_position_pct:.3%}"
 
-            # Risk per trade check
-            risk_pct = pos_pct * (decision.leverage or settings.default_leverage)
-            max_risk = settings.max_risk_per_trade_pct * 100  # as a rough check
-            # Stop loss must be set
+            # Stop loss MUST be set
             if not decision.stop_loss or decision.stop_loss <= 0:
                 return False, "Stop loss is mandatory for every trade"
+
+            # Take profit MUST be set
+            if not decision.take_profit or decision.take_profit <= 0:
+                return False, "Take profit is mandatory for every trade"
+
+            # Actual risk calculation based on SL distance
+            leverage = decision.leverage or settings.default_leverage
+            entry_approx = decision.entry_price or 0
+            if entry_approx > 0 and decision.stop_loss > 0:
+                sl_distance_pct = abs(entry_approx - decision.stop_loss) / entry_approx
+                actual_risk_pct = pos_pct * leverage * sl_distance_pct
+                max_risk = settings.max_risk_per_trade_pct
+                if actual_risk_pct > max_risk * 2:  # give some margin
+                    return False, f"Risk too high: {actual_risk_pct:.2%} of capital at risk (max {max_risk:.2%})"
+
+            # Margin ratio check - don't over-leverage
+            if margin_ratio > 0.70:
+                return False, f"Margin ratio too high ({margin_ratio:.0%}), reduce positions before adding more"
 
             # Check we have enough balance
             margin_needed = balance * pos_pct

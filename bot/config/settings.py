@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     slippage_alt: float = 0.0003    # 0.03% altcoins
 
     # Timeframes
-    analysis_interval_seconds: int = 60    # 1 minute per pair
-    optimization_interval_hours: int = 6
-    deep_analysis_interval_hours: int = 4
+    analysis_interval_seconds: int = 30    # faster cycle for scalping
+    optimization_interval_hours: int = 4   # optimize more frequently
+    deep_analysis_interval_hours: int = 2  # learn faster
     sentiment_poll_minutes: int = 15
+    funding_rate_check_minutes: int = 30   # check funding rates
+    futures_data_poll_minutes: int = 5     # OI + liquidations
 
     # Memory
     max_similar_trades_in_prompt: int = 5

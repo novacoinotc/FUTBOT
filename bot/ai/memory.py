@@ -45,13 +45,30 @@ class MemorySystem:
         await self.db.insert_memory(memory)
         logger.info(f"Recorded trade memory: {trade.pair} {trade.direction.value} PnL={trade.pnl:.4f}")
 
+        # Update rule statistics based on this trade outcome
+        await self._update_rule_stats_from_trade(trade)
+
+    async def _update_rule_stats_from_trade(self, trade: Trade):
+        """After a trade closes, update stats for any rules that match."""
+        rules = await self.db.get_active_rules()
+        profitable = trade.pnl > 0
+
+        for rule in rules:
+            # Simple keyword matching to see if rule was relevant
+            rule_text = rule["rule"].lower()
+            pair_relevant = trade.pair.lower() in rule_text or "all" in rule_text
+            direction_match = trade.direction.value.lower() in rule_text
+
+            if pair_relevant or direction_match:
+                await self.db.update_rule_stats(rule["id"], successful=profitable)
+
     async def find_similar(
         self,
         pair: str,
         market_regime: str = "unknown",
         limit: int = 5,
     ) -> list[dict]:
-        """Find similar past trades with win-rate statistics for Claude's prompt."""
+        """Find similar past trades (pair + regime) for Claude's prompt."""
         memories = await self.db.find_similar_trades(pair, market_regime, limit)
         for m in memories:
             if isinstance(m.get("indicators_at_entry"), str):
@@ -67,9 +84,7 @@ class MemorySystem:
         return memories
 
     async def get_pattern_stats(self, pair: str, direction: str, market_regime: str) -> dict:
-        """Get win-rate statistics for a specific pattern (pair + direction + regime).
-        Returns stats like: 'BTCUSDT LONG in trending_up: 7/10 trades won (70%)'
-        """
+        """Get win-rate statistics for a specific pattern (pair + direction + regime)."""
         all_memories = await self.db.get_recent_memories(limit=500)
         matching = [
             m for m in all_memories
@@ -87,9 +102,14 @@ class MemorySystem:
         best = max(m.get("pnl_pct", 0) for m in matching)
         worst = min(m.get("pnl_pct", 0) for m in matching)
 
+        # Recent trend (last 10 trades)
+        recent = matching[:10]
+        recent_wins = sum(1 for m in recent if m.get("pnl", 0) > 0) if recent else 0
+        recent_str = f", recent {recent_wins}/{len(recent)}" if len(recent) >= 3 else ""
+
         summary = (
             f"{pair or 'ALL'} {direction or 'ALL'} in {market_regime or 'ALL'}: "
-            f"{wins}/{total} won ({wins/total*100:.0f}%), "
+            f"{wins}/{total} won ({wins/total*100:.0f}%){recent_str}, "
             f"avg PnL {avg_pnl:.2f}%, best {best:.2f}%, worst {worst:.2f}%, "
             f"avg hold {avg_hold:.0f}min"
         )
@@ -117,9 +137,7 @@ class MemorySystem:
                 continue
 
             # Find the memory entry for this trade
-            memories = await self.db.find_similar_trades(
-                pair="", market_regime="", limit=100
-            )
+            memories = await self.db.find_similar_trades(pair="", market_regime="", limit=200)
             for mem in memories:
                 if mem.get("trade_id") == trade_id:
                     await self.db.update_memory_lesson(mem["id"], lesson, tags)
@@ -140,6 +158,12 @@ class MemorySystem:
             "updated_at": now,
         })
         logger.info(f"New learned rule: {rule[:80]}")
+
+    async def cleanup_rules(self):
+        """Auto-deactivate rules with poor performance."""
+        deactivated = await self.db.deactivate_poor_rules(min_applied=5, max_success_rate=0.35)
+        if deactivated:
+            logger.info(f"Deactivated {deactivated} poor-performing rules")
 
     async def get_active_rules(self) -> list[dict]:
         """Get all active learned rules."""
@@ -177,7 +201,8 @@ class MemorySystem:
             "losing_trades": total - winning,
             "active_rules": len(rules),
             "top_rules": [
-                {"rule": r["rule"][:100], "confidence": r["confidence"]}
+                {"rule": r["rule"][:100], "confidence": r["confidence"],
+                 "success_rate": f"{r['times_successful']}/{r['times_applied']}" if r['times_applied'] > 0 else "new"}
                 for r in rules[:5]
             ],
         }

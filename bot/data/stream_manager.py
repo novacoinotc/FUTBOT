@@ -17,11 +17,12 @@ MAX_STREAMS_PER_CONNECTION = 200  # Binance limit
 class StreamManager:
     """Manages WebSocket connections to Binance Futures for multiple pairs."""
 
-    def __init__(self, pairs: list[str], on_kline: Callable, on_book_ticker: Callable, on_agg_trade: Callable):
+    def __init__(self, pairs: list[str], on_kline: Callable, on_book_ticker: Callable, on_agg_trade: Callable, on_mark_price: Callable = None):
         self.pairs = [p.lower() for p in pairs]
         self.on_kline = on_kline
         self.on_book_ticker = on_book_ticker
         self.on_agg_trade = on_agg_trade
+        self.on_mark_price = on_mark_price
         self._sessions: list[aiohttp.ClientSession] = []
         self._ws_connections: list[aiohttp.ClientWebSocketResponse] = []
         self._running = False
@@ -36,6 +37,7 @@ class StreamManager:
             streams.append(f"{pair}@kline_5m")
             streams.append(f"{pair}@bookTicker")
             streams.append(f"{pair}@aggTrade")
+            streams.append(f"{pair}@markPrice@1s")  # funding rate + mark price
         return streams
 
     async def start(self):
@@ -101,6 +103,9 @@ class StreamManager:
                 await self.on_book_ticker(payload)
             elif "@aggTrade" in stream:
                 await self.on_agg_trade(payload)
+            elif "@markPrice" in stream:
+                if self.on_mark_price:
+                    await self.on_mark_price(payload)
         except Exception as e:
             logger.error(f"Error handling {stream}: {e}")
 
