@@ -248,20 +248,22 @@ class PaperTrader:
         return None
 
     def update_trailing_stops(self, pair: str):
-        """Update trailing stop based on price movement. Called on every price update."""
+        """Update trailing stop based on price movement.
+        IMPORTANT: Only activates after position is in profit to avoid
+        immediately tightening Claude's carefully calculated SL."""
         position = self.positions.get(pair)
         if not position or not position.trailing_stop_distance:
             return
 
         if position.direction == Direction.LONG:
-            # For longs, move SL up as price reaches new highs
             new_sl = position.highest_price - position.trailing_stop_distance
-            if new_sl > position.stop_loss:
+            # Only trail once in profit: new SL must be above entry price
+            if new_sl > position.entry_price and new_sl > position.stop_loss:
                 position.stop_loss = new_sl
         else:
-            # For shorts, move SL down as price reaches new lows
             new_sl = position.lowest_price + position.trailing_stop_distance
-            if new_sl < position.stop_loss or position.stop_loss == 0:
+            # Only trail once in profit: new SL must be below entry price
+            if new_sl < position.entry_price and 0 < new_sl < position.stop_loss:
                 position.stop_loss = new_sl
 
     def set_trailing_stop(self, pair: str, distance: float):

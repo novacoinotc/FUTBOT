@@ -155,7 +155,7 @@ class TradingEngine:
     # --- WebSocket Handlers ---
 
     async def _on_kline(self, data: dict):
-        """Handle incoming kline data - check SL/TP/liquidation on EVERY update."""
+        """Handle incoming kline data - check SL/TP/liquidation on kline updates."""
         self.candle_store.update_from_kline(data)
 
         pair = data["s"]
@@ -170,18 +170,30 @@ class TradingEngine:
         # Update trailing stops
         self.paper_trader.update_trailing_stops(pair)
 
-        # Check SL/TP/liquidation using candle HIGH and LOW (not just close)
-        # This catches intra-candle wicks
+        # Check SL/TP/liquidation using candle HIGH and LOW (catches wicks)
         position = self.paper_trader.positions.get(pair)
         if position:
+            # Grace period: let position breathe for 15 seconds after opening
+            hold_seconds = (datetime.utcnow() - position.opened_at).total_seconds()
+            if hold_seconds < 15:
+                # Only check liquidation during grace period (safety net)
+                liq_trigger = None
+                if position.direction.value == "LONG" and position.liquidation_price > 0 and low <= position.liquidation_price:
+                    liq_trigger = "liq"
+                elif position.direction.value == "SHORT" and position.liquidation_price > 0 and high >= position.liquidation_price:
+                    liq_trigger = "liq"
+                if liq_trigger:
+                    trade = await self.paper_trader.close_position(pair, position.liquidation_price, f"LIQUIDATED at {price:.4f}")
+                    if trade:
+                        await self.memory.record_trade(trade, {}, self._current_regime)
+                return
+
             trigger = None
             if position.direction.value == "LONG":
-                # For longs, check if LOW went below SL or liq
                 trigger = self.paper_trader.check_stop_loss_take_profit(pair, low)
                 if not trigger:
                     trigger = self.paper_trader.check_stop_loss_take_profit(pair, high)
             else:
-                # For shorts, check if HIGH went above SL or liq
                 trigger = self.paper_trader.check_stop_loss_take_profit(pair, high)
                 if not trigger:
                     trigger = self.paper_trader.check_stop_loss_take_profit(pair, low)
@@ -192,7 +204,6 @@ class TradingEngine:
             if trigger:
                 if trigger == "liq":
                     reason = f"LIQUIDATED at {price:.4f}"
-                    # On liquidation, you lose the entire margin
                     trade = await self.paper_trader.close_position(pair, position.liquidation_price, reason)
                 elif trigger == "sl":
                     reason = f"Stop loss hit at {price:.4f}"
@@ -208,25 +219,17 @@ class TradingEngine:
                     await self.memory.record_trade(trade, indicators, self._current_regime)
 
     async def _on_book_ticker(self, data: dict):
-        """Handle incoming order book ticker."""
+        """Handle incoming order book ticker - price tracking only (SL checked on kline)."""
         self.orderbook_store.update_from_book_ticker(data)
 
-        # Also check SL/TP from book ticker (more frequent than klines)
         pair = data["s"]
         if pair in self.paper_trader.positions:
             mid = (float(data["b"]) + float(data["a"])) / 2
             self.paper_trader.update_position_price(pair, mid)
             self.paper_trader.update_trailing_stops(pair)
 
-            trigger = self.paper_trader.check_stop_loss_take_profit(pair, mid)
-            if trigger:
-                reason = f"{'Liquidation' if trigger == 'liq' else 'SL' if trigger == 'sl' else 'TP'} from book ticker"
-                trade = await self.paper_trader.close_position(pair, mid, reason)
-                if trade:
-                    await self.memory.record_trade(trade, {}, self._current_regime)
-
     async def _on_agg_trade(self, data: dict):
-        """Handle aggregate trade data - real-time SL/TP checking."""
+        """Handle aggregate trade data - price tracking only (SL checked on kline)."""
         pair = data["s"]
         if pair not in self.paper_trader.positions:
             return
@@ -234,13 +237,6 @@ class TradingEngine:
         price = float(data["p"])
         self.paper_trader.update_position_price(pair, price)
         self.paper_trader.update_trailing_stops(pair)
-
-        trigger = self.paper_trader.check_stop_loss_take_profit(pair, price)
-        if trigger:
-            reason = f"{'Liquidation' if trigger == 'liq' else 'SL' if trigger == 'sl' else 'TP'} from trade tick"
-            trade = await self.paper_trader.close_position(pair, price, reason)
-            if trade:
-                await self.memory.record_trade(trade, {}, self._current_regime)
 
     async def _on_mark_price(self, data: dict):
         """Handle markPrice stream - extract funding rates in real-time."""
@@ -410,10 +406,10 @@ class TradingEngine:
         if decision.action in (ActionType.ENTER_LONG, ActionType.ENTER_SHORT):
             position = await self.paper_trader.open_position(decision, price)
             if position:
-                # Enable trailing stop based on ATR
+                # Enable trailing stop based on ATR (wider to let trades breathe)
                 atr = snapshot.atr_14
                 if atr:
-                    self.paper_trader.set_trailing_stop(pair, atr * 1.5)
+                    self.paper_trader.set_trailing_stop(pair, atr * 2.5)
 
                 # Store indicators with the trade
                 indicators = snapshot.model_dump(exclude_none=True, exclude={"timestamp"})
