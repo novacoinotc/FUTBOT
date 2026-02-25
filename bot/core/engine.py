@@ -9,7 +9,7 @@ from typing import Optional
 from config.settings import settings
 from config.pairs import get_top_pairs
 from core.events import EventBus, EventType, Event
-from core.models import ActionType, MarketRegime
+from core.models import ActionType, MarketRegime, MarketSnapshot
 from data.candles import CandleStore
 from data.orderbook import OrderBookStore
 from data.stream_manager import StreamManager
@@ -282,12 +282,37 @@ class TradingEngine:
                     await asyncio.sleep(10)
                     continue
 
-                for pair in active_pairs:
+                # Prioritize pairs with open positions
+                position_pairs = [p for p in active_pairs if p in self.paper_trader.positions]
+                other_pairs = [p for p in active_pairs if p not in self.paper_trader.positions]
+                ordered_pairs = position_pairs + other_pairs
+
+                # Score all pairs and sort by signal strength
+                scored_pairs = []
+                for pair in ordered_pairs:
+                    snapshot = self.market_analyzer.get_snapshot(pair)
+                    if snapshot:
+                        scored_pairs.append((pair, self._signal_score(snapshot)))
+
+                # Sort by score descending, always analyze at least top 5
+                scored_pairs.sort(key=lambda x: x[1], reverse=True)
+                min_analyze = min(5, len(scored_pairs))
+
+                analyzed = 0
+                for pair, score in scored_pairs:
                     if not self._running:
                         break
+                    # Analyze if: has open position, score >= 2, or in top 5
+                    if pair not in self.paper_trader.positions and score < 2 and analyzed >= min_analyze:
+                        continue
 
                     await self._analyze_pair(pair, params)
-                    await asyncio.sleep(0.5)  # faster between pairs
+                    analyzed += 1
+                    await asyncio.sleep(0.3)
+
+                if self._analysis_count % 5 == 0:
+                    top_scores = [(p, s) for p, s in scored_pairs[:5]]
+                    logger.info(f"Cycle {self._analysis_count}: analyzed {analyzed}/{len(scored_pairs)}, top: {top_scores}")
 
                 self._analysis_count += 1
                 await asyncio.sleep(settings.analysis_interval_seconds)
@@ -295,6 +320,41 @@ class TradingEngine:
             except Exception as e:
                 logger.error(f"Analysis loop error: {e}", exc_info=True)
                 await asyncio.sleep(5)
+
+    def _signal_score(self, snapshot: MarketSnapshot) -> int:
+        """Score a pair's signal strength (0-15+). Higher = more interesting for Claude."""
+        adx = snapshot.adx or 0
+        rsi_7 = snapshot.rsi_7 or 50
+        bb_squeeze = snapshot.bb_squeeze or False
+        bb_pct = snapshot.bb_pct or 0.5
+        macd_hist = snapshot.macd_hist or 0
+        ema_alignment = snapshot.ema_alignment or 0
+        rsi_divergence = snapshot.rsi_divergence or "none"
+        consecutive = snapshot.consecutive_direction or 0
+        volume_buy_ratio = snapshot.volume_buy_ratio or 0.5
+        stoch_k = snapshot.stoch_rsi_k or 50
+
+        score = 0
+
+        if adx > 25: score += 2
+        elif adx > 18: score += 1
+
+        if rsi_7 < 25 or rsi_7 > 75: score += 2
+        elif rsi_7 < 35 or rsi_7 > 65: score += 1
+
+        if bb_squeeze: score += 2
+
+        if bb_pct < 0.05 or bb_pct > 0.95: score += 2
+        elif bb_pct < 0.15 or bb_pct > 0.85: score += 1
+
+        if abs(macd_hist) > 0: score += 1
+        if abs(ema_alignment) > 0.5: score += 1
+        if rsi_divergence != "none": score += 2
+        if abs(consecutive) >= 3: score += 2
+        if volume_buy_ratio < 0.3 or volume_buy_ratio > 0.7: score += 1
+        if stoch_k < 10 or stoch_k > 90: score += 1
+
+        return score
 
     async def _analyze_pair(self, pair: str, params: dict):
         """Analyze a single pair and execute Claude's decision."""
@@ -385,10 +445,15 @@ class TradingEngine:
         await asyncio.sleep(60)  # wait for startup
 
         while self._running:
+            # Skip entirely if REST API is geo-restricted (we use WS markPrice instead)
+            if self.futures_data._geo_restricted:
+                await asyncio.sleep(3600)  # check once per hour in case it becomes available
+                self.futures_data._geo_restricted = False  # retry
+                continue
+
             try:
                 await self.futures_data.fetch_all(self.pairs)
                 self._update_futures_data()
-                logger.info("Futures data updated (OI, funding rates, L/S ratios)")
             except Exception as e:
                 logger.error(f"Futures data loop error: {e}")
 
@@ -465,7 +530,7 @@ class TradingEngine:
 
     async def _deep_analysis_loop(self):
         """Run deep analysis with Claude Sonnet every 2 hours."""
-        await asyncio.sleep(60)
+        await asyncio.sleep(3600)  # wait 1h before first analysis (need trades first)
 
         while self._running:
             try:
@@ -515,13 +580,13 @@ class TradingEngine:
 
     async def _optimization_loop(self):
         """Run optimizer every 4 hours."""
-        await asyncio.sleep(120)
+        await asyncio.sleep(7200)  # wait 2h before first optimization (need new trades first)
 
         while self._running:
             try:
                 if await self.optimizer.should_run():
                     recent_trades = await self.db.get_trades(status="closed", limit=50)
-                    if len(recent_trades) >= 5:
+                    if len(recent_trades) >= 10:  # need sufficient data for meaningful optimization
                         daily_stats = await self.position_manager.compute_daily_stats()
                         changes = await self.optimizer.run(daily_stats, recent_trades)
                         if changes:

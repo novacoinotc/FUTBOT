@@ -68,9 +68,11 @@ class RiskManager:
             if decision.confidence < min_score:
                 return False, f"Confidence {decision.confidence:.2f} below threshold {min_score}"
 
-            # Extreme fear enforcement: raise confidence threshold
-            if self._fear_greed < 15 and decision.confidence < 0.80:
-                return False, f"Extreme fear (F&G={self._fear_greed}): need confidence >= 0.80, got {decision.confidence:.2f}"
+            # Fear-based confidence adjustment (graduated, not a wall)
+            if self._fear_greed < 10 and decision.confidence < 0.72:
+                return False, f"Extreme fear (F&G={self._fear_greed}): need confidence >= 0.72, got {decision.confidence:.2f}"
+            elif self._fear_greed < 20 and decision.confidence < 0.65:
+                return False, f"High fear (F&G={self._fear_greed}): need confidence >= 0.65, got {decision.confidence:.2f}"
 
             # Leverage check
             max_lev = settings.max_leverage

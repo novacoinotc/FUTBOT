@@ -189,8 +189,9 @@ def _volume_buy_ratio(df: pd.DataFrame, lookback: int = 5) -> Optional[float]:
 
 
 def calculate_all(df: pd.DataFrame) -> dict:
-    """Calculate all indicators from OHLCV DataFrame. Returns a flat dict."""
-    if df.empty or len(df) < 21:
+    """Calculate all indicators from OHLCV DataFrame. Returns a flat dict.
+    Each indicator handles its own data requirements — returns None if insufficient."""
+    if df.empty or len(df) < 10:
         return {}
 
     result = {}
@@ -323,7 +324,7 @@ def calculate_all(df: pd.DataFrame) -> dict:
 
 def calculate_5m(df_5m: pd.DataFrame) -> dict:
     """Calculate key indicators on 5-minute timeframe for multi-timeframe context."""
-    if df_5m.empty or len(df_5m) < 14:
+    if df_5m.empty or len(df_5m) < 5:
         return {}
 
     result = {}

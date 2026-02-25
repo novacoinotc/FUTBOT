@@ -41,10 +41,10 @@ If no changes needed: {{"changes": [], "overall_reasoning": "Performance is stab
 
 # Parameter bounds
 PARAM_BOUNDS = {
-    "default_leverage": (1, 10),
-    "default_position_pct": (0.002, 0.015),
-    "max_open_positions": (1, 8),
-    "min_score_to_enter": (0.4, 0.9),
+    "default_leverage": (2, 10),
+    "default_position_pct": (0.003, 0.015),
+    "max_open_positions": (3, 8),
+    "min_score_to_enter": (0.50, 0.70),  # scalping needs lower entry bar
     "daily_loss_pause_pct": (-0.05, -0.01),
 }
 
@@ -112,7 +112,7 @@ Suggest parameter changes (max 20% change per parameter per cycle).
 
         try:
             response = self.client.messages.create(
-                model="claude-sonnet-4-6-20250514",
+                model="claude-sonnet-4-6",
                 max_tokens=1000,
                 system=OPTIMIZER_SYSTEM,
                 messages=[{"role": "user", "content": prompt}],

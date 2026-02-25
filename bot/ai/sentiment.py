@@ -31,6 +31,8 @@ class SentimentAnalyzer:
         self._breaking_news: list[dict] = []
         self._monthly_calls: int = 0
         self._monthly_calls_checked: Optional[datetime] = None
+        self._cryptopanic_disabled: bool = False
+        self._cryptopanic_fail_count: int = 0
 
     async def _check_monthly_limit(self) -> bool:
         """Check if CryptoPanic monthly limit is approaching. Returns True if safe."""
@@ -52,7 +54,11 @@ class SentimentAnalyzer:
     async def fetch_news(self) -> dict:
         """Fetch latest important crypto news from CryptoPanic.
         Budget: ~100 calls/day (3000/month). Hard-enforced.
+        Auto-disables after 3 consecutive failures (Cloudflare blocking, etc).
         """
+        if self._cryptopanic_disabled:
+            return {"score": self._sentiment_score, "recent_news": "CryptoPanic unavailable (Cloudflare)"}
+
         if not settings.cryptopanic_api_key:
             return {"score": 50, "recent_news": "No API key configured"}
 
@@ -71,6 +77,9 @@ class SentimentAnalyzer:
                 })
                 resp.raise_for_status()
                 data = resp.json()
+
+            # Success — reset fail count
+            self._cryptopanic_fail_count = 0
 
             results = data.get("results", [])
             self._last_news = results[:10]
@@ -115,8 +124,13 @@ class SentimentAnalyzer:
             }
 
         except Exception as e:
-            logger.error(f"CryptoPanic fetch error: {e}")
-            return {"score": self._sentiment_score, "recent_news": f"Fetch error: {e}"}
+            self._cryptopanic_fail_count += 1
+            if self._cryptopanic_fail_count >= 3:
+                self._cryptopanic_disabled = True
+                logger.warning(f"CryptoPanic disabled after {self._cryptopanic_fail_count} failures (likely Cloudflare). Using F&G Index only.")
+            else:
+                logger.warning(f"CryptoPanic fetch error ({self._cryptopanic_fail_count}/3): {e}")
+            return {"score": self._sentiment_score, "recent_news": "CryptoPanic unavailable"}
 
     async def fetch_fear_greed(self) -> Optional[int]:
         """Fetch Fear & Greed Index (free, unlimited)."""

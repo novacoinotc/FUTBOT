@@ -22,19 +22,28 @@ class FuturesDataFetcher:
         self._funding_rates: dict[str, float] = {}  # pair -> current rate
         self._long_short_ratios: dict[str, float] = {}  # pair -> ratio
         self._last_fetch: Optional[datetime] = None
+        self._geo_restricted: bool = False
 
     async def fetch_all(self, pairs: list[str]):
         """Fetch OI, funding rates, and L/S ratios for all pairs."""
+        if self._geo_restricted:
+            return  # skip if we know it's blocked
+
         base_url = BINANCE_FAPI
-        async with httpx.AsyncClient(timeout=15) as client:
-            # Test connectivity, fallback to alt if 451
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+            # Test connectivity first
             try:
                 test = await client.get(f"{base_url}/fapi/v1/premiumIndex", params={"symbol": "BTCUSDT"})
-                if test.status_code == 451:
+                if test.status_code in (451, 302, 403):
+                    # Try alt
                     base_url = BINANCE_FAPI_ALT
-                    logger.info(f"Binance FAPI geo-restricted, using alt: {base_url}")
+                    test2 = await client.get(f"{base_url}/fapi/v1/premiumIndex", params={"symbol": "BTCUSDT"})
+                    if test2.status_code in (451, 302, 403):
+                        self._geo_restricted = True
+                        logger.warning("Binance REST API geo-restricted from this VPS. Using WebSocket markPrice for funding rates.")
+                        return
             except Exception:
-                pass
+                return
 
             await self._fetch_funding_rates(client, pairs, base_url)
             await self._fetch_open_interest(client, pairs, base_url)
