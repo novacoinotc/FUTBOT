@@ -97,8 +97,8 @@ class RiskManager:
             entry_approx = decision.entry_price or 0
             if entry_approx > 0 and decision.stop_loss > 0:
                 sl_distance_pct = abs(entry_approx - decision.stop_loss) / entry_approx
-                if sl_distance_pct < 0.003:  # 0.3% minimum SL distance
-                    return False, f"SL too tight: {sl_distance_pct:.2%} from entry (min 0.30%)"
+                if sl_distance_pct < 0.005:  # 0.5% minimum SL distance
+                    return False, f"SL too tight: {sl_distance_pct:.2%} from entry (min 0.50%)"
 
                 # Actual risk calculation based on SL distance
                 actual_risk_pct = pos_pct * leverage * sl_distance_pct

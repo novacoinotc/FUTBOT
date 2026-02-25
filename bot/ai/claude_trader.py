@@ -29,10 +29,9 @@ TRADE_DECISION_SYSTEM = """You are an elite Binance Futures scalping AI running 
 Your goal: maximize net PnL after ALL costs (fees, funding, slippage, API).
 
 YOU ARE A SCALPER:
-- Target 0.3-2% moves per trade
-- Trade frequently across many pairs
+- Target 0.5-2% moves per trade
 - ENTER when 2-3 indicators align, even if not all are perfect
-- HOLD should be the EXCEPTION — most pairs have SOME setup
+- Be SELECTIVE: quality entries > quantity. Only enter with clear technical edge.
 
 CRITICAL: GIVE TRADES ROOM TO BREATHE
 - SL too tight = guaranteed stop-out from normal market noise
@@ -73,9 +72,16 @@ PAST PERFORMANCE NOTE:
 - NEVER refuse to trade a pair just because of a small-sample bad streak
 - Focus on the CURRENT technical setup, not historical anecdotes
 
+POSITION MANAGEMENT (CRITICAL):
+- LET TRADES WORK. SL and TP exist for a reason — don't manually EXIT before they trigger.
+- EXIT only if: (1) MAJOR reversal signal (not minor fluctuation), OR (2) position in profit ≥ 1%
+- Small drawdowns (-0.5%) are NORMAL in scalping. Do NOT panic-exit every dip.
+- If position is profitable, PREFER ADJUST (tighten SL to lock profit) over EXIT.
+- HOLD is often the best decision for open positions. Patience wins.
+
 HARD RULES:
 - EXACTLY ONE JSON object (no markdown, no text outside JSON)
-- Confidence 0.0-1.0; trade when >= 0.60
+- Confidence 0.0-1.0; trade when >= 0.65
 - Max {max_positions} positions, max 1 per pair
 - BOTH stop_loss AND take_profit MANDATORY
 - Risk per trade: max {risk_pct}% of capital
@@ -164,7 +170,7 @@ class ClaudeTrader:
         try:
             response = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=500,
+                max_tokens=350,
                 system=system,
                 messages=[{"role": "user", "content": user_prompt}],
             )
@@ -342,15 +348,20 @@ Analyze deeply:
 
         # Task
         if has_position:
+            pos = next(p for p in open_positions if p["pair"] == snapshot.pair)
+            hold_min = pos.get("hold_time_minutes", 0)
+            pnl_pct = pos.get("unrealized_pnl", 0) / max(pos.get("margin_used", 1), 1) * 100
             parts.append(
-                "\n## Task\nDecide: EXIT, ADJUST, or HOLD."
-                " Consider funding rate cost, trailing stop opportunity, and hold time."
+                f"\n## Task\nDecide: EXIT, ADJUST, or HOLD. Position held {hold_min:.0f} min, PnL: {pnl_pct:.1f}%."
+                " PREFER HOLD — let SL/TP do their job."
+                " EXIT only for MAJOR reversal signals (not minor fluctuations)."
+                " If profitable: ADJUST SL to lock profit rather than EXIT."
             )
         else:
             parts.append(
                 f"\n## Task\nDecide: ENTER_LONG, ENTER_SHORT, or HOLD for {snapshot.pair}."
-                " If entering: set ATR-based SL, min 1.5:1 R:R, and state which indicators drove the decision."
-                " If holding: briefly state why."
+                " If entering: set SL at 1.5-2.5x ATR (min 0.5% from entry), TP at 2-4x ATR."
+                " Only enter with CLEAR technical edge. Quality > quantity."
             )
 
         return "\n".join(parts)

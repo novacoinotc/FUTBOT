@@ -67,6 +67,7 @@ class TradingEngine:
         self._last_deep_analysis: Optional[datetime] = None
         self._last_optimization: Optional[datetime] = None
         self._current_regime = MarketRegime.UNKNOWN
+        self._pair_cooldown: dict[str, datetime] = {}  # pair -> last close time
 
     async def start(self):
         """Initialize all components and start the trading loop."""
@@ -215,6 +216,7 @@ class TradingEngine:
                     trade = await self.paper_trader.close_position(pair, price, trigger)
 
                 if trade:
+                    self._pair_cooldown[pair] = datetime.utcnow()
                     indicators = {}
                     await self.memory.record_trade(trade, indicators, self._current_regime)
 
@@ -359,12 +361,26 @@ class TradingEngine:
         if not snapshot:
             return
 
+        has_position = pair in self.paper_trader.positions
+
+        # Per-pair cooldown: don't enter a pair that was just closed
+        if not has_position and pair in self._pair_cooldown:
+            elapsed = (datetime.utcnow() - self._pair_cooldown[pair]).total_seconds()
+            if elapsed < 180:  # 3-minute cooldown between trades on same pair
+                return
+
+        # Min hold time: don't ask Claude about young positions (let SL/TP work)
+        if has_position:
+            position = self.paper_trader.positions[pair]
+            hold_minutes = (datetime.utcnow() - position.opened_at).total_seconds() / 60
+            if hold_minutes < 3.0:
+                return  # Let the trade breathe — SL/TP protect it
+
         # Get context for Claude
         regime = self._current_regime.value
         similar_trades = await self.memory.find_similar(pair, regime)
         active_rules = await self.memory.get_active_rules()
         open_positions = self.position_manager.get_open_positions()
-        has_position = pair in self.paper_trader.positions
 
         # Check circuit breaker
         cb_active, cb_reason = self.circuit_breaker.check(self.paper_trader.total_equity)
@@ -422,6 +438,7 @@ class TradingEngine:
         elif decision.action == ActionType.EXIT:
             trade = await self.paper_trader.close_position(pair, price, decision.reasoning)
             if trade:
+                self._pair_cooldown[pair] = datetime.utcnow()
                 indicators = snapshot.model_dump(exclude_none=True, exclude={"timestamp"})
                 await self.memory.record_trade(trade, indicators, self._current_regime)
 
