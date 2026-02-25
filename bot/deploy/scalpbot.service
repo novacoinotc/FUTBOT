@@ -1,0 +1,17 @@
+[Unit]
+Description=ScalpBot - Adaptive Futures Scalper
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/scalpbot
+ExecStart=/root/scalpbot/.venv/bin/python /root/scalpbot/bot/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

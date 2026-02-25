@@ -8,3 +8,12 @@ dist/
 .turbo/
 .vercel/
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+bot/db/*.db
+bot/bot.log

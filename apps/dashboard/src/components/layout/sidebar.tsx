@@ -4,20 +4,22 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Bot,
-  Inbox,
+  ArrowLeftRight,
+  Brain,
   BarChart3,
-  GitBranch,
-  Network,
+  SlidersHorizontal,
+  DollarSign,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/requests", label: "Requests", icon: Inbox },
-  { href: "/family-tree", label: "Family Tree", icon: GitBranch },
-  { href: "/activity-map", label: "Mapa de Actividad", icon: Network },
+  { href: "/trades", label: "Trades", icon: ArrowLeftRight },
+  { href: "/memory", label: "Memory", icon: Brain },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/params", label: "Parameters", icon: SlidersHorizontal },
+  { href: "/costs", label: "Costs", icon: DollarSign },
 ];
 
 export function Sidebar() {
@@ -28,8 +30,9 @@ export function Sidebar() {
       <div className="p-4 border-b border-border">
         <Link href="/" className="flex items-center gap-2">
           <Bot className="w-6 h-6 text-green-400" />
-          <span className="font-bold text-lg">BotSurviver</span>
+          <span className="font-bold text-lg">ScalpBot</span>
         </Link>
+        <p className="text-xs text-muted-foreground mt-1">Adaptive Futures Scalper</p>
       </div>
 
       <nav className="flex-1 p-2 space-y-1">
@@ -51,7 +54,7 @@ export function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-border text-xs text-muted-foreground">
-        AI Survival Experiment
+        Paper Trading Mode
       </div>
     </aside>
   );

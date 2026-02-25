@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BotSurviver - AI Survival Dashboard",
-  description: "Monitor autonomous AI agents fighting for survival",
+  title: "ScalpBot - Adaptive Futures Scalper",
+  description: "AI-powered scalping bot for Binance Futures with adaptive learning",
 };
 
 export default function RootLayout({

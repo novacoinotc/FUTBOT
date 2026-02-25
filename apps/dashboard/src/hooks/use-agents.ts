@@ -1,22 +1,15 @@
-"use client";
-
 import useSWR from "swr";
-import { api } from "@/lib/api-client";
+import { api, BotStatus, PositionsResponse } from "@/lib/api-client";
 
-export function useAgents() {
-  return useSWR("agents", () => api.getAgents(), {
-    refreshInterval: 15000,
-  });
+export function useStatus() {
+  return useSWR<BotStatus>("status", () => api.getStatus(), { refreshInterval: 5000 });
 }
 
-export function useAgent(id: string) {
-  return useSWR(id ? `agent-${id}` : null, () => api.getAgent(id), {
-    refreshInterval: 10000,
-  });
+export function usePositions() {
+  return useSWR<PositionsResponse>("positions", () => api.getPositions(), { refreshInterval: 5000 });
 }
 
+// Keep old name for compatibility with Header
 export function useStats() {
-  return useSWR("stats", () => api.getStats(), {
-    refreshInterval: 10000,
-  });
+  return useStatus();
 }

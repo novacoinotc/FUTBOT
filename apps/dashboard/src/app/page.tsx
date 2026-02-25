@@ -1,149 +1,274 @@
 "use client";
 
-import { useAgents, useStats } from "@/hooks/use-agents";
-import { AgentCard } from "@/components/agents/agent-card";
-import { LiveFeed } from "@/components/live-feed";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { useStatus, usePositions } from "@/hooks/use-agents";
+import useSWR from "swr";
 import { api } from "@/lib/api-client";
-import { toast } from "sonner";
-import { Zap, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  BarChart3,
+  Target,
+  ShieldAlert,
+  Clock,
+  Activity,
+} from "lucide-react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 export default function OverviewPage() {
-  const { data: agentsData, mutate: mutateAgents } = useAgents();
-  const { mutate: mutateStats } = useStats();
-  const [triggering, setTriggering] = useState(false);
-  const [autoApprove, setAutoApprove] = useState(true);
-  const [togglingAuto, setTogglingAuto] = useState(false);
+  const { data: status } = useStatus();
+  const { data: positions } = usePositions();
+  const { data: analytics } = useSWR("analytics", () => api.getAnalytics(), {
+    refreshInterval: 30000,
+  });
+  const { data: trades } = useSWR("recent-trades", () => api.getTrades({ limit: 5 }), {
+    refreshInterval: 10000,
+  });
 
-  const agents = agentsData?.data ?? [];
-  const alive = agents.filter((a) => a.status === "alive");
-  const dead = agents.filter((a) => a.status === "dead");
+  const pnl = status?.total_pnl ?? 0;
+  const isProfit = pnl >= 0;
 
-  useEffect(() => {
-    api.getAutoApprove().then((data) => setAutoApprove(data.enabled)).catch(() => {});
-  }, []);
-
-  const handleTrigger = async () => {
-    setTriggering(true);
-    try {
-      await api.triggerCycle();
-      toast.success("Ciclo de agentes activado");
-      setTimeout(() => {
-        mutateAgents();
-        mutateStats();
-      }, 3000);
-    } catch {
-      toast.error("Error al activar ciclo");
-    } finally {
-      setTriggering(false);
-    }
-  };
-
-  const handleToggleAutoApprove = async () => {
-    setTogglingAuto(true);
-    try {
-      const result = await api.setAutoApprove(!autoApprove);
-      setAutoApprove(result.enabled);
-      toast.success(
-        result.enabled
-          ? "Auto-aprobar activado: el agente opera libremente"
-          : "Auto-aprobar desactivado: requiere aprobación manual"
-      );
-    } catch {
-      toast.error("Error al cambiar auto-aprobar");
-    } finally {
-      setTogglingAuto(false);
-    }
-  };
-
-  const handleRefresh = () => {
-    mutateAgents();
-    mutateStats();
-  };
+  // Build equity curve from daily stats
+  const equityCurve =
+    analytics?.daily_stats
+      ?.slice()
+      .reverse()
+      .map((d) => ({
+        date: d.date,
+        equity: d.ending_balance,
+        pnl: d.pnl_net,
+      })) ?? [];
 
   return (
-    <div className="flex gap-6">
-      {/* Main content */}
-      <div className="flex-1 space-y-6 min-w-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Panel de Agentes</h1>
-            <p className="text-muted-foreground text-sm">
-              Monitorea todos los agentes autónomos del ecosistema
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Overview</h1>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Balance</CardTitle>
+            <Wallet className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold font-mono">
+              ${(status?.total_equity ?? 0).toFixed(2)}
             </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant={autoApprove ? "default" : "outline"}
-              size="sm"
-              onClick={handleToggleAutoApprove}
-              disabled={togglingAuto}
-              className={autoApprove ? "bg-green-600 hover:bg-green-700" : ""}
-            >
-              {autoApprove ? (
-                <ShieldCheck className="w-4 h-4 mr-1" />
-              ) : (
-                <ShieldOff className="w-4 h-4 mr-1" />
-              )}
-              {autoApprove ? "Auto-Aprobar: ON" : "Auto-Aprobar: OFF"}
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleRefresh}>
-              <RefreshCw className="w-4 h-4 mr-1" />
-              Actualizar
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleTrigger}
-              disabled={triggering}
-            >
-              <Zap className="w-4 h-4 mr-1" />
-              {triggering ? "Ejecutando..." : "Forzar Ciclo"}
-            </Button>
-          </div>
-        </div>
-
-        {alive.length > 0 && (
-          <section>
-            <h2 className="text-lg font-semibold mb-3 text-green-400">
-              Vivos ({alive.length})
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {alive.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {dead.length > 0 && (
-          <section>
-            <h2 className="text-lg font-semibold mb-3 text-red-400">
-              Muertos ({dead.length})
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {dead.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {agents.length === 0 && (
-          <div className="text-center py-20 text-muted-foreground">
-            <p className="text-lg">Sin agentes aún</p>
-            <p className="text-sm">
-              Ejecuta el seed para crear el agente Genesis
+            <p className="text-xs text-muted-foreground">
+              Free: ${(status?.free_margin ?? 0).toFixed(2)}
             </p>
-          </div>
-        )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total PnL</CardTitle>
+            {isProfit ? (
+              <TrendingUp className="w-4 h-4 text-green-400" />
+            ) : (
+              <TrendingDown className="w-4 h-4 text-red-400" />
+            )}
+          </CardHeader>
+          <CardContent>
+            <p className={`text-2xl font-bold font-mono ${isProfit ? "text-green-400" : "text-red-400"}`}>
+              {isProfit ? "+" : ""}${pnl.toFixed(2)}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {(status?.total_pnl_pct ?? 0).toFixed(2)}% return
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Win Rate</CardTitle>
+            <Target className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold font-mono">
+              {((analytics?.win_rate ?? 0) * 100).toFixed(1)}%
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {analytics?.winning_trades ?? 0}W / {analytics?.losing_trades ?? 0}L
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Drawdown</CardTitle>
+            <BarChart3 className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold font-mono text-red-400">
+              {(status?.drawdown_pct ?? 0).toFixed(2)}%
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Max: {(analytics?.max_drawdown_pct ?? 0).toFixed(2)}%
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Live Feed sidebar */}
-      <Card className="w-80 shrink-0 p-4 hidden lg:block">
-        <LiveFeed />
-      </Card>
+      {/* Equity Curve */}
+      {equityCurve.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Equity Curve</CardTitle>
+          </CardHeader>
+          <CardContent className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={equityCurve}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "hsl(var(--card))",
+                    border: "1px solid hsl(var(--border))",
+                    borderRadius: "8px",
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="equity"
+                  stroke="hsl(142, 71%, 45%)"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* Open Positions */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              Open Positions
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(positions?.positions ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No open positions</p>
+            ) : (
+              <div className="space-y-3">
+                {positions?.positions.map((pos) => {
+                  const isPnlPositive = pos.unrealized_pnl >= 0;
+                  return (
+                    <div key={pos.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/50">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-medium">{pos.pair}</span>
+                          <Badge
+                            variant="secondary"
+                            className={pos.direction === "LONG"
+                              ? "bg-green-500/20 text-green-400"
+                              : "bg-red-500/20 text-red-400"
+                            }
+                          >
+                            {pos.direction} {pos.leverage}x
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Entry: ${pos.entry_price.toFixed(2)} | {pos.hold_time_minutes.toFixed(0)}m
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`font-mono font-medium ${isPnlPositive ? "text-green-400" : "text-red-400"}`}>
+                          {isPnlPositive ? "+" : ""}${pos.unrealized_pnl.toFixed(4)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          ${pos.current_price.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Recent Trades */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="w-4 h-4" />
+              Recent Trades
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(trades?.trades ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No trades yet</p>
+            ) : (
+              <div className="space-y-3">
+                {trades?.trades.map((trade) => {
+                  const isPnlPositive = trade.pnl >= 0;
+                  return (
+                    <div key={trade.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/50">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-medium">{trade.pair}</span>
+                          <Badge
+                            variant="secondary"
+                            className={trade.direction === "LONG"
+                              ? "bg-green-500/20 text-green-400"
+                              : "bg-red-500/20 text-red-400"
+                            }
+                          >
+                            {trade.direction}
+                          </Badge>
+                          <Badge variant="secondary">{trade.status}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {trade.hold_time_minutes.toFixed(0)}m | {trade.leverage}x
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`font-mono font-medium ${isPnlPositive ? "text-green-400" : "text-red-400"}`}>
+                          {isPnlPositive ? "+" : ""}${trade.pnl.toFixed(4)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {(trade.pnl_pct * 100).toFixed(2)}%
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Circuit Breaker */}
+      {status?.circuit_breaker?.active && (
+        <Card className="border-red-500/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-red-400">
+              <ShieldAlert className="w-5 h-5" />
+              Circuit Breaker Active
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm">{status.circuit_breaker.reason}</p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
