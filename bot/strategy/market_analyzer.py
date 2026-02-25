@@ -116,6 +116,12 @@ class MarketAnalyzer:
             consecutive_direction=indicators.get("consecutive_direction"),
             price_position_range=indicators.get("price_position_range"),
             volume_buy_ratio=indicators.get("volume_buy_ratio"),
+            volume_ratio=indicators.get("volume_ratio"),
+            price_ema_ratio=indicators.get("price_ema_ratio"),
+            dist_to_support_pct=indicators.get("dist_to_support_pct"),
+            dist_to_resistance_pct=indicators.get("dist_to_resistance_pct"),
+            momentum_score=indicators.get("momentum_score"),
+            trend_strength_score=indicators.get("trend_strength_score"),
             # Multi-timeframe 5m
             rsi_14_5m=indicators_5m.get("rsi_14_5m"),
             ema_trend_5m=indicators_5m.get("ema_trend_5m"),

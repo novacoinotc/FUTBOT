@@ -74,6 +74,12 @@ class MarketSnapshot(BaseModel):
     consecutive_direction: Optional[int] = None  # +3 = 3 green candles, -2 = 2 red
     price_position_range: Optional[float] = None  # 0-1 position in 20m high/low
     volume_buy_ratio: Optional[float] = None  # 0-1, >0.5 = more buying
+    volume_ratio: Optional[float] = None  # current vol / avg vol (>1.5 = spike)
+    price_ema_ratio: Optional[float] = None  # price / EMA21 (mean-reversion signal)
+    dist_to_support_pct: Optional[float] = None  # % distance to nearest support
+    dist_to_resistance_pct: Optional[float] = None  # % distance to nearest resistance
+    momentum_score: Optional[float] = None  # composite 0-1 (RSI + MACD + volume + StochRSI)
+    trend_strength_score: Optional[float] = None  # composite 0-1 (ADX + EMA alignment + price position)
     # Multi-timeframe (5m)
     rsi_14_5m: Optional[float] = None
     ema_trend_5m: Optional[str] = None  # above_all, below_all, mixed

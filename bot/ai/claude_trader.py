@@ -49,7 +49,11 @@ AUTONOMY:
 INDICATORS IN DATA:
 1m: RSI(7/14), StochRSI(K/D), EMA Alignment(-1/+1), MACD(hist+signal), BB(pct/width/squeeze), ADX+DI+/DI-, MFI, ATR%, VWAP, Volume Delta
 5m: RSI_14, EMA_trend, ADX, MACD_signal
-Advanced: RSI Divergence(bullish_div/bearish_div/none), Consecutive Candles(+N/-N), Price Position(0=low,1=high), Volume Buy Ratio(0-1)
+Advanced: RSI Divergence, Consecutive Candles(+N/-N), Price Position(0-1), Volume Buy Ratio(0-1)
+Volume: volume_ratio (current/avg, >1.5=spike confirming move, <0.7=low conviction)
+Support/Resistance: dist_to_support_pct, dist_to_resistance_pct (% from nearest swing levels)
+Price Stretch: price_ema_ratio (price/EMA21, <0.98=oversold stretch, >1.02=overbought stretch)
+Composites: momentum_score(0-1), trend_strength_score(0-1) — pre-computed signal quality
 Order Flow: Book Imbalance(>1=buyers), Spread%
 Futures: Funding Rate, Open Interest + OI Change%, Long/Short Ratio (top traders)
 Macro: Fear&Greed Index (0=extreme fear, 100=extreme greed)

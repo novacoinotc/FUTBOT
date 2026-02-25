@@ -188,6 +188,100 @@ def _volume_buy_ratio(df: pd.DataFrame, lookback: int = 5) -> Optional[float]:
     return round(buy / total, 4)
 
 
+def _support_resistance(df: pd.DataFrame, lookback: int = 50) -> Optional[dict]:
+    """Find nearest support/resistance from swing highs/lows."""
+    if len(df) < lookback:
+        return None
+
+    recent = df.tail(lookback)
+    price = recent["close"].iloc[-1]
+    highs = recent["high"].values
+    lows = recent["low"].values
+
+    # Find local maxima/minima (swing points)
+    swing_highs = []
+    swing_lows = []
+    for i in range(2, len(highs) - 2):
+        if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+            swing_highs.append(highs[i])
+        if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+            swing_lows.append(lows[i])
+
+    if not swing_highs and not swing_lows:
+        return None
+
+    result = {}
+    # Nearest resistance (above price)
+    resistances = [h for h in swing_highs if h > price]
+    if resistances:
+        nearest_r = min(resistances)
+        result["dist_to_resistance_pct"] = round((nearest_r - price) / price * 100, 4)
+
+    # Nearest support (below price)
+    supports = [l for l in swing_lows if l < price]
+    if supports:
+        nearest_s = max(supports)
+        result["dist_to_support_pct"] = round((price - nearest_s) / price * 100, 4)
+
+    return result if result else None
+
+
+def _momentum_score(indicators: dict) -> Optional[float]:
+    """Composite momentum score 0-1 combining RSI, MACD, volume, StochRSI."""
+    components = []
+
+    rsi = indicators.get("rsi_14")
+    if rsi is not None:
+        # RSI normalized: 0 at 30, 1 at 70
+        components.append(max(0, min(1, (rsi - 30) / 40)))
+
+    macd_signal = indicators.get("macd_signal")
+    if macd_signal:
+        if macd_signal == "bullish_cross":
+            components.append(1.0)
+        elif macd_signal == "bullish":
+            components.append(0.7)
+        elif macd_signal == "bearish":
+            components.append(0.3)
+        elif macd_signal == "bearish_cross":
+            components.append(0.0)
+
+    vbr = indicators.get("volume_buy_ratio")
+    if vbr is not None:
+        components.append(vbr)
+
+    stoch_k = indicators.get("stoch_rsi_k")
+    if stoch_k is not None:
+        components.append(max(0, min(1, stoch_k / 100)))
+
+    if not components:
+        return None
+    return round(sum(components) / len(components), 4)
+
+
+def _trend_strength_score(indicators: dict) -> Optional[float]:
+    """Composite trend strength score 0-1 combining ADX, EMA alignment, price position."""
+    components = []
+
+    adx = indicators.get("adx")
+    if adx is not None:
+        # ADX normalized: 0 at 15, 1 at 40
+        components.append(max(0, min(1, (adx - 15) / 25)))
+
+    ema_align = indicators.get("ema_alignment")
+    if ema_align is not None:
+        # -1 to +1 → 0 to 1
+        components.append((ema_align + 1) / 2)
+
+    price_pos = indicators.get("price_position_range")
+    if price_pos is not None:
+        components.append(price_pos)
+
+    if not components:
+        return None
+    return round(sum(components) / len(components), 4)
+
+
 def calculate_all(df: pd.DataFrame) -> dict:
     """Calculate all indicators from OHLCV DataFrame. Returns a flat dict.
     Each indicator handles its own data requirements — returns None if insufficient."""
@@ -315,6 +409,27 @@ def calculate_all(df: pd.DataFrame) -> dict:
         vbr = _volume_buy_ratio(df, 5)
         if vbr is not None:
             result["volume_buy_ratio"] = vbr
+
+        # === NEW: VOLUME RATIO (current vs average) ===
+        if "volume" in df.columns and len(df) >= 20:
+            avg_vol = df["volume"].rolling(20).mean().iloc[-1]
+            curr_vol = df["volume"].iloc[-1]
+            if avg_vol and avg_vol > 0:
+                result["volume_ratio"] = round(curr_vol / avg_vol, 2)
+
+        # === NEW: PRICE TO EMA RATIO (mean-reversion signal) ===
+        ema_21_val = result.get("ema_21")
+        if ema_21_val and ema_21_val > 0:
+            result["price_ema_ratio"] = round(price / ema_21_val, 6)
+
+        # === NEW: SUPPORT/RESISTANCE (swing highs/lows) ===
+        sr = _support_resistance(df, lookback=50)
+        if sr:
+            result.update(sr)
+
+        # === NEW: MOMENTUM + TREND COMPOSITES ===
+        result["momentum_score"] = _momentum_score(result)
+        result["trend_strength_score"] = _trend_strength_score(result)
 
     except Exception as e:
         logger.error(f"Error calculating indicators: {e}")
