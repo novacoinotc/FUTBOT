@@ -129,8 +129,14 @@ class TradingEngine:
         self._running = False
         if self.stream_manager:
             await self.stream_manager.stop()
-        await self.position_manager.compute_daily_stats()
-        await self.db.close()
+        try:
+            await self.position_manager.compute_daily_stats()
+        except Exception as e:
+            logger.warning(f"Could not compute final stats: {e}")
+        try:
+            await self.db.close()
+        except Exception:
+            pass
         logger.info("Engine stopped.")
 
     # --- WebSocket Handlers ---
@@ -179,7 +185,13 @@ class TradingEngine:
 
                 active_pairs = self.candle_store.pairs_with_data
                 if not active_pairs:
-                    logger.info("Waiting for data to accumulate...")
+                    counts = self.candle_store.get_candle_counts()
+                    max_count = max(counts.values()) if counts else 0
+                    total_pairs_receiving = len(counts)
+                    logger.info(
+                        f"Accumulating data: {total_pairs_receiving} pairs receiving, "
+                        f"max {max_count}/14 candles (need ~{max(0, 14-max_count)} more minutes)"
+                    )
                     await asyncio.sleep(10)
                     continue
 

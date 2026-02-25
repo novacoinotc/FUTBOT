@@ -33,7 +33,7 @@ class MarketAnalyzer:
 
     def get_snapshot(self, pair: str) -> Optional[MarketSnapshot]:
         """Generate a full market snapshot for a single pair."""
-        if not self.candles.has_enough_data(pair, min_candles=21):
+        if not self.candles.has_enough_data(pair, min_candles=14):
             return None
 
         price = self.candles.get_latest_price(pair)
