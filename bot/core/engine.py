@@ -68,6 +68,7 @@ class TradingEngine:
         self._last_optimization: Optional[datetime] = None
         self._current_regime = MarketRegime.UNKNOWN
         self._pair_cooldown: dict[str, datetime] = {}  # pair -> last close time
+        self._market_context: dict = {}  # cached market summary for prompt
 
     async def start(self):
         """Initialize all components and start the trading loop."""
@@ -268,6 +269,9 @@ class TradingEngine:
                 # Fast regime detection every cycle
                 self._current_regime = self.market_analyzer.get_market_regime_consensus(self.pairs)
 
+                # Cache market summary for Claude's prompt (once per cycle, not per pair)
+                self._market_context = self.market_analyzer.get_market_summary(self.pairs)
+
                 active_pairs = self.candle_store.pairs_with_data
                 if not active_pairs:
                     counts = self.candle_store.get_candle_counts()
@@ -399,6 +403,8 @@ class TradingEngine:
             current_params=params,
             balance=self.paper_trader.balance,
             pattern_stats=pattern_stats,
+            market_regime=self._current_regime.value,
+            market_context=self._market_context,
         )
 
         # Validate with risk manager

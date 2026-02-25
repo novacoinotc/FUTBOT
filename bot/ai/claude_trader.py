@@ -39,27 +39,35 @@ CRITICAL: GIVE TRADES ROOM TO BREATHE
 - TP MINIMUM 2x ATR, prefer 3-4x ATR for 1.5:1+ R:R
 - For BTC/ETH: SL at least $50-150 / $3-10 from entry
 - For altcoins: SL at least 0.5-1.5% from entry
-- NEVER set SL closer than 0.3% from entry on any pair
+- NEVER set SL closer than 0.4% from entry on any pair
 
 AUTONOMY:
 - Choose which indicators matter (don't need all of them)
 - Strategy: momentum, mean-reversion, breakout, trend-following, or hybrid
 - Leverage (2-8x), position size (0.3-1%), SL/TP distances
 
-INDICATORS AVAILABLE:
-1m: RSI(7/14), StochRSI(K/D), EMA(9/21/50), MACD, BB(pct/width/squeeze), ADX+DI, MFI, ATR%, VWAP, Volume Delta
+INDICATORS IN DATA:
+1m: RSI(7/14), StochRSI(K/D), EMA Alignment(-1/+1), MACD(hist+signal), BB(pct/width/squeeze), ADX+DI+/DI-, MFI, ATR%, VWAP, Volume Delta
 5m: RSI_14, EMA_trend, ADX, MACD_signal
-Advanced: RSI Divergence, EMA Alignment(-1/+1), Consecutive Candles, Price Position(0-1), Volume Buy Ratio
-Order Flow: Book Imbalance, Spread%, Volume Buy Ratio
-Futures: OI + OI Change%, Funding Rate, Long/Short Ratio
-Macro: Fear&Greed Index, News Sentiment
+Advanced: RSI Divergence(bullish_div/bearish_div/none), Consecutive Candles(+N/-N), Price Position(0=low,1=high), Volume Buy Ratio(0-1)
+Order Flow: Book Imbalance(>1=buyers), Spread%
+Futures: Funding Rate
+Macro: Fear&Greed Index (0=extreme fear, 100=extreme greed)
 
-STRATEGY:
+USE THE MARKET REGIME:
+- You will receive the overall market regime (trending_up/trending_down/ranging/volatile)
+- trending_up: favor LONGs, use trend-following, wider TP
+- trending_down: favor SHORTs, use trend-following, wider TP
+- ranging: mean-reversion, fade extremes, tighter SL/TP
+- volatile: wider SL (2.5x ATR), reduce position size, only highest-conviction setups
+
+STRATEGY BY INDICATORS:
 - ADX>25 + EMA aligned → TREND FOLLOW (wider SL 2-2.5x ATR, wider TP)
 - ADX<20 + BB squeeze → MEAN REVERT (fade extremes)
 - BB squeeze releasing + volume → BREAKOUT (enter on confirmation)
 - RSI divergence → REVERSAL (counter-trend)
 - Consecutive 4+ candles → EXHAUSTION (fade it)
+- Book imbalance >2 or <0.5 → Strong directional pressure
 
 FEAR & GREED: Do NOT stop trading in fear markets. Volatility = opportunity.
 - Extreme Fear (<20): More SHORT opportunities, watch for bounce LONGs. Use 2x ATR SL.
@@ -68,7 +76,6 @@ FEAR & GREED: Do NOT stop trading in fear markets. Volatility = opportunity.
 
 PAST PERFORMANCE NOTE:
 - Win-rate stats may be based on small samples — treat them as hints, not rules
-- A 0% win rate on 3 trades is NOT meaningful — it could easily be noise
 - NEVER refuse to trade a pair just because of a small-sample bad streak
 - Focus on the CURRENT technical setup, not historical anecdotes
 
@@ -151,6 +158,8 @@ class ClaudeTrader:
         current_params: dict,
         balance: float,
         pattern_stats: dict = None,
+        market_regime: str = "unknown",
+        market_context: dict = None,
     ) -> TradeDecision:
         """Ask Claude Haiku to make a trade decision for a single pair."""
 
@@ -159,7 +168,8 @@ class ClaudeTrader:
 
         user_prompt = self._build_trade_prompt(
             snapshot, open_positions, similar_trades, active_rules,
-            current_params, balance, has_position, pattern_stats
+            current_params, balance, has_position, pattern_stats,
+            market_regime, market_context,
         )
 
         system = TRADE_DECISION_SYSTEM.format(
@@ -293,17 +303,32 @@ Analyze deeply:
         balance: float,
         has_position: bool,
         pattern_stats: dict = None,
+        market_regime: str = "unknown",
+        market_context: dict = None,
     ) -> str:
         """Build compact but comprehensive prompt for trade decision."""
         # Only include non-None fields, exclude noisy ones
         snap_dict = snapshot.model_dump(exclude_none=True)
         snap_dict["timestamp"] = snap_dict["timestamp"].isoformat()
-        # Remove fields that Claude doesn't need raw
+        # Remove fields that Claude doesn't need raw (ema_alignment covers these)
         for key in ("ema_9", "ema_21", "ema_50", "bb_upper", "bb_lower"):
             snap_dict.pop(key, None)
+        # Remove useless sentiment if CryptoPanic is disabled
+        if snap_dict.get("sentiment") and "unavailable" in str(snap_dict.get("sentiment", {}).get("recent_news", "")):
+            snap_dict.pop("sentiment", None)
+
+        # Market regime and broader context FIRST so Claude has full picture
+        regime_line = f"**Regime: {market_regime}**"
+        if market_context:
+            bull = market_context.get("bullish_pairs", 0)
+            bear = market_context.get("bearish_pairs", 0)
+            total = market_context.get("total_pairs", 0)
+            fg = market_context.get("fear_greed", "?")
+            regime_line += f" | Market: {bull}/{total} bullish, {bear}/{total} bearish | F&G: {fg}"
 
         parts = [
-            f"## Market Data: {snapshot.pair}\n{json.dumps(snap_dict, indent=2)}",
+            f"## Market Overview\n{regime_line}",
+            f"\n## {snapshot.pair} Data\n{json.dumps(snap_dict, indent=2)}",
             f"\n## Account\nBalance: ${balance:.2f} | Open: {len(open_positions)}/{int(current_params.get('max_open_positions', 5))}",
         ]
 
