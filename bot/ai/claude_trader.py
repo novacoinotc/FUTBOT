@@ -170,7 +170,7 @@ class ClaudeTrader:
         try:
             response = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=350,
+                max_tokens=450,
                 system=system,
                 messages=[{"role": "user", "content": user_prompt}],
             )
